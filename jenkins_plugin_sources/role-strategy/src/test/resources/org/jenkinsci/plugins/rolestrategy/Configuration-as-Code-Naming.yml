@@ -1,0 +1,82 @@
+jenkins:
+  authorizationStrategy:
+    roleBased:
+      roles:
+        global:
+          - name: "admin"
+            description: "Jenkins administrators"
+            permissions:
+              - "Overall/Administer"
+            entries:
+              - user: "admin"
+          - name: "readonly"
+            description: "Read-only users"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+            entries:
+              - group: "authenticated"
+          - name: "jobcreate"
+            description: "Create Job User"
+            permissions:
+              - "Job/Create"
+              - "Job/Configure"
+            entries:
+              - user: "userGlobal"
+              - group: "groupGlobal"
+              - either: "eitherGlobal"
+        items:
+          - name: "jobcreate"
+            description: "Can create jobs"
+            pattern: "^job.*"
+            permissions:
+              - "Job/Configure"
+              - "Job/Build"
+              - "Job/Delete"
+              - "Job/Create"
+              - "Job/Read"
+            entries:
+              - user: "userJobCreate"
+              - group: "groupJobCreate"
+              - either: "eitherJobCreate"
+          - name: "folderjobcreate"
+            description: "Can create jobs in a folder"
+            pattern: "^folder/job.*"
+            permissions:
+              - "Job/Configure"
+              - "Job/Build"
+              - "Job/Delete"
+              - "Job/Create"
+              - "Job/Read"
+            entries:
+              - user: "userJobCreate"
+              - group: "groupJobCreate"
+              - either: "eitherJobCreate"
+          - name: "jobread"
+            description: "Can only read jobs"
+            pattern: "^job.*"
+            permissions:
+              - "Job/Build"
+              - "Job/Read"
+            entries:
+              - user: "userRead"
+              - group: "groupRead"
+              - either: "eitherRead"
+
+  # System for test
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "1234"
+        - id: "user1"
+          password: ""
+        - id: "user2"
+          password: ""
+        - id: "user3"
+          password: ""
+
+  projectNamingStrategy:
+    roleBased:
+      forceExistingJobs: false

@@ -1,0 +1,33 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout"
+         xmlns:t="/lib/hudson" xmlns:f="/lib/form">
+  <f:section title="${%Git plugin}">
+    <f:entry title="${%Global Config user.name Value}" field="globalConfigName">
+      <f:textbox />
+    </f:entry>
+    <f:entry title="${%Global Config user.email Value}" field="globalConfigEmail">
+      <f:textbox />
+    </f:entry>
+    <f:entry field="createAccountBasedOnEmail">
+      <f:checkbox title="${%Create new accounts based on author/committer's email}" name="createAccountBasedOnEmail" checked="${descriptor.createAccountBasedOnEmail}"/>
+    </f:entry>
+    <f:entry field="useExistingAccountWithSameEmail">
+      <f:checkbox title="${%Use existing account with same email if found}" name="useExistingAccountWithSameEmail" checked="${descriptor.useExistingAccountWithSameEmail}"/>
+    </f:entry>
+    <f:entry field="showEntireCommitSummaryInChanges">
+      <f:checkbox title="${%Show the entire commit summary in changes}" name="showEntireCommitSummaryInChanges" checked="${descriptor.showEntireCommitSummaryInChanges}"/>
+    </f:entry>
+    <f:entry field="hideCredentials">
+      <f:checkbox title="${%Hide credential usage in job output}" name="hideCredentials" checked="${descriptor.hideCredentials}"/>
+    </f:entry>
+    <f:entry field="disableGitToolChooser">
+      <f:checkbox title="${%Disable performance enhancements}" name="disableGitToolChooser" checked="${descriptor.disableGitToolChooser}"/>
+    </f:entry>
+    <f:entry field="allowSecondFetch">
+      <f:checkbox title="${%Preserve second fetch during checkout}" name="allowSecondFetch" checked="${descriptor.allowSecondFetch}"/>
+    </f:entry>
+    <f:entry field="addGitTagAction">
+      <f:checkbox title="${%Add git tag action to jobs}" name="addGitTagAction" checked="${descriptor.addGitTagAction}"/>
+    </f:entry>
+  </f:section>
+</j:jelly>

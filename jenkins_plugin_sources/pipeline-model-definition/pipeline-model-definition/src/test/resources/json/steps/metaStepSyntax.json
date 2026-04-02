@@ -1,0 +1,101 @@
+{"pipeline": {
+  "stages": [  {
+    "name": "foo",
+    "branches": [    {
+      "name": "default",
+      "steps":       [
+        {
+          "name": "writeFile",
+          "arguments":           [
+            {
+              "key": "text",
+              "value":               {
+                "isLiteral": true,
+                "value": "hello world"
+              }
+            },
+            {
+              "key": "file",
+              "value":               {
+                "isLiteral": true,
+                "value": "msg.out"
+              }
+            }
+          ]
+        },
+        {
+          "name": "writeFile",
+          "arguments":           [
+            {
+              "key": "text",
+              "value":               {
+                "isLiteral": true,
+                "value": "goodbye world"
+              }
+            },
+            {
+              "key": "file",
+              "value":               {
+                "isLiteral": true,
+                "value": "msg2.out"
+              }
+            }
+          ]
+        },
+        {
+          "name": "archiveArtifacts",
+          "arguments":           [
+            {
+              "key": "allowEmptyArchive",
+              "value":               {
+                "isLiteral": true,
+                "value": true
+              }
+            },
+            {
+              "key": "artifacts",
+              "value":               {
+                "isLiteral": true,
+                "value": "msg.out"
+              }
+            }
+          ]
+        },
+        {
+          "name": "step",
+          "arguments": [          {
+            "key": "delegate",
+            "value":             {
+              "isLiteral": false,
+              "value": "[$class: 'ArtifactArchiver', artifacts: 'msg2.out', fingerprint: true]"
+            }
+          }]
+        },
+        {
+          "name": "rhombus",
+          "arguments":           {
+            "isLiteral": true,
+            "value": 123
+          },
+          "children": [          {
+            "name": "echo",
+            "arguments": [            {
+              "key": "message",
+              "value":               {
+                "isLiteral": true,
+                "value": "hi from in rhombus"
+              }
+            }]
+          }]
+        }
+      ]
+    }]
+  }],
+  "agent":   {
+    "type": "label",
+    "argument":     {
+      "isLiteral": true,
+      "value": "some-label"
+    }
+  }
+}}

@@ -1,0 +1,997 @@
+/*
+ * Copyright (C) 2015 Original Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.csanchez.jenkins.plugins.kubernetes.pipeline;
+
+import static org.csanchez.jenkins.plugins.kubernetes.pipeline.Constants.EXIT;
+
+import edu.umd.cs.findbugs.annotations.NonNull;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import hudson.AbortException;
+import hudson.EnvVars;
+import hudson.FilePath;
+import hudson.Launcher;
+import hudson.LauncherDecorator;
+import hudson.Proc;
+import hudson.model.Computer;
+import hudson.model.Node;
+import hudson.remoting.VirtualChannel;
+import hudson.slaves.WorkspaceList;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientException;
+import io.fabric8.kubernetes.client.dsl.ExecListener;
+import io.fabric8.kubernetes.client.dsl.ExecWatch;
+import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
+import java.io.FileNotFoundException;
+import java.io.FilterOutputStream;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import org.apache.commons.io.FilenameUtils;
+import org.apache.commons.io.output.TeeOutputStream;
+import org.csanchez.jenkins.plugins.kubernetes.ContainerTemplate;
+import org.csanchez.jenkins.plugins.kubernetes.KubernetesSlave;
+import org.csanchez.jenkins.plugins.kubernetes.PodContainerSource;
+import org.jenkinsci.plugins.kubernetes.auth.KubernetesAuthException;
+import org.jenkinsci.plugins.workflow.steps.EnvironmentExpander;
+
+/**
+ * This decorator interacts directly with the Kubernetes exec API to run commands inside a container. It does not use
+ * the Jenkins agent to execute commands.
+ *
+ */
+public class ContainerExecDecorator extends LauncherDecorator implements Serializable, Closeable {
+
+    private static final long serialVersionUID = 4419929753433397655L;
+
+    private static final String WEBSOCKET_CONNECTION_MAX_RETRY_SYSTEM_PROPERTY =
+            ContainerExecDecorator.class.getName() + ".websocketConnectionMaxRetries";
+    private static final String WEBSOCKET_CONNECTION_MAX_RETRY_BACKOFF_SYSTEM_PROPERTY =
+            ContainerExecDecorator.class.getName() + ".websocketConnectionMaxRetryBackoff";
+    private static final String WEBSOCKET_CONNECTION_TIMEOUT_SYSTEM_PROPERTY =
+            ContainerExecDecorator.class.getName() + ".websocketConnectionTimeout";
+    /** time to wait in seconds for websocket to connect */
+    private static final int WEBSOCKET_CONNECTION_TIMEOUT =
+            Integer.getInteger(WEBSOCKET_CONNECTION_TIMEOUT_SYSTEM_PROPERTY, 30);
+    /** maximum number of times to retry failed websocket connection */
+    private static final int WEBSOCKET_CONNECTION_MAX_RETRY =
+            Integer.getInteger(WEBSOCKET_CONNECTION_MAX_RETRY_SYSTEM_PROPERTY, 5);
+    /** maximum backoff time for retrying failed websocket connection  */
+    private static final int WEBSOCKET_CONNECTION_MAX_RETRY_BACKOFF =
+            Integer.getInteger(WEBSOCKET_CONNECTION_MAX_RETRY_BACKOFF_SYSTEM_PROPERTY, 30);
+
+    private static final String COOKIE_VAR = "JENKINS_SERVER_COOKIE";
+
+    private static final Logger LOGGER = Logger.getLogger(ContainerExecDecorator.class.getName());
+
+    /**
+     * stdin buffer size for commands sent to Kubernetes exec api. A low value will cause slowness in commands executed.
+     * A higher value will consume more memory
+     */
+    private static final int STDIN_BUFFER_SIZE =
+            Integer.getInteger(ContainerExecDecorator.class.getName() + ".stdinBufferSize", 16 * 1024);
+    /**
+     * time in milliseconds to wait for checking whether the process immediately returned
+     */
+    public static final int COMMAND_FINISHED_TIMEOUT_MS = 200;
+
+    @SuppressFBWarnings(value = "SE_TRANSIENT_FIELD_NOT_RESTORED", justification = "not needed on deserialization")
+    private transient List<Closeable> closables;
+
+    private String containerName;
+    private EnvironmentExpander environmentExpander;
+    private EnvVars globalVars;
+    private EnvVars rcEnvVars;
+    private String shell;
+    private KubernetesNodeContext nodeContext;
+
+    public ContainerExecDecorator() {}
+
+    @Deprecated
+    public ContainerExecDecorator(
+            KubernetesClient client,
+            String podName,
+            String containerName,
+            String namespace,
+            EnvironmentExpander environmentExpander,
+            FilePath ws) {
+        this.containerName = containerName;
+        this.environmentExpander = environmentExpander;
+    }
+
+    @Deprecated
+    public ContainerExecDecorator(
+            KubernetesClient client,
+            String podName,
+            String containerName,
+            String namespace,
+            EnvironmentExpander environmentExpander) {
+        this(client, podName, containerName, namespace, environmentExpander, null);
+    }
+
+    @Deprecated
+    public ContainerExecDecorator(KubernetesClient client, String podName, String containerName, String namespace) {
+        this(client, podName, containerName, namespace, null, null);
+    }
+
+    @Deprecated
+    public ContainerExecDecorator(
+            KubernetesClient client,
+            String podName,
+            String containerName,
+            AtomicBoolean alive,
+            CountDownLatch started,
+            CountDownLatch finished,
+            String namespace) {
+        this(client, podName, containerName, namespace, null, null);
+    }
+
+    @Deprecated
+    public ContainerExecDecorator(
+            KubernetesClient client,
+            String podName,
+            String containerName,
+            AtomicBoolean alive,
+            CountDownLatch started,
+            CountDownLatch finished) {
+        this(client, podName, containerName, (String) null, null, null);
+    }
+
+    @Deprecated
+    public ContainerExecDecorator(
+            KubernetesClient client,
+            String podName,
+            String containerName,
+            String path,
+            AtomicBoolean alive,
+            CountDownLatch started,
+            CountDownLatch finished) {
+        this(client, podName, containerName, (String) null, null, null);
+    }
+
+    @Deprecated
+    public KubernetesClient getClient() {
+        try {
+            return nodeContext.connectToCloud();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Deprecated
+    public void setClient(KubernetesClient client) {
+        // NOOP
+    }
+
+    @Deprecated
+    // TODO make private
+    public String getPodName() {
+        try {
+            return getNodeContext().getPodName();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Deprecated
+    public void setPodName(String podName) {
+        // NOOP
+    }
+
+    @Deprecated
+    // TODO make private
+    public String getNamespace() {
+        try {
+            return getNodeContext().getNamespace();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Deprecated
+    public void setNamespace(String namespace) {
+        // NOOP
+    }
+
+    public String getContainerName() {
+        return containerName;
+    }
+
+    public void setContainerName(String containerName) {
+        this.containerName = containerName;
+    }
+
+    public EnvironmentExpander getEnvironmentExpander() {
+        return environmentExpander;
+    }
+
+    public void setEnvironmentExpander(EnvironmentExpander environmentExpander) {
+        this.environmentExpander = environmentExpander;
+    }
+
+    public EnvVars getGlobalVars() {
+        return globalVars;
+    }
+
+    public void setGlobalVars(EnvVars globalVars) {
+        this.globalVars = globalVars;
+    }
+
+    public void setRunContextEnvVars(EnvVars rcVars) {
+        this.rcEnvVars = rcVars;
+    }
+
+    public EnvVars getRunContextEnvVars() {
+        return this.rcEnvVars;
+    }
+
+    public void setShell(String shell) {
+        this.shell = shell;
+    }
+
+    public KubernetesNodeContext getNodeContext() {
+        return nodeContext;
+    }
+
+    public void setNodeContext(KubernetesNodeContext nodeContext) {
+        this.nodeContext = nodeContext;
+    }
+
+    private String workspace;
+
+    @Override
+    public Launcher decorate(final Launcher launcher, final Node node) {
+
+        // Allows other nodes to be provisioned inside the container clause
+        // If the node is not a KubernetesSlave return the original launcher
+        if (node != null && !(node instanceof KubernetesSlave)) {
+            return launcher;
+        }
+        return new Launcher.DecoratedLauncher(launcher) {
+            @Override
+            public Proc launch(ProcStarter starter) throws IOException {
+                LOGGER.log(Level.FINEST, "Launch proc with environment: {0}", Arrays.toString(starter.envs()));
+
+                // find container working dir
+                KubernetesSlave slave = (KubernetesSlave) node;
+                FilePath containerWorkingDirFilePath = starter.pwd();
+                String containerWorkingDirFilePathStr = containerWorkingDirFilePath != null
+                        ? containerWorkingDirFilePath.getRemote()
+                        : ContainerTemplate.DEFAULT_WORKING_DIR;
+                workspace = containerWorkingDirFilePathStr;
+                String containerWorkingDirStr = ContainerTemplate.DEFAULT_WORKING_DIR;
+                if (slave != null && slave.getPod().isPresent() && containerName != null) {
+                    Optional<String> containerWorkingDir = PodContainerSource.lookupContainerWorkingDir(
+                            slave.getPod().get(), containerName);
+                    if (containerWorkingDir.isPresent()) {
+                        containerWorkingDirStr = containerWorkingDir.get();
+                    }
+
+                    if (containerWorkingDir.isPresent()
+                            && containerWorkingDirFilePath != null
+                            && !containerWorkingDirFilePath.getRemote().startsWith(containerWorkingDirStr)) {
+                        // Container has a custom workingDir, updated the pwd to match container working dir
+                        containerWorkingDirFilePathStr = containerWorkingDirFilePath
+                                .getRemote()
+                                .replaceFirst(ContainerTemplate.DEFAULT_WORKING_DIR, containerWorkingDirStr);
+                        containerWorkingDirFilePath =
+                                new FilePath(containerWorkingDirFilePath.getChannel(), containerWorkingDirFilePathStr);
+                        LOGGER.log(
+                                Level.FINEST,
+                                "Modified the pwd to match {0} containers workspace directory : {1}",
+                                new String[] {containerName, containerWorkingDirFilePathStr});
+                    }
+                }
+
+                String[] envVars = starter.envs();
+                // modify the working dir on envvars part of starter env vars
+                if (!containerWorkingDirStr.equals(ContainerTemplate.DEFAULT_WORKING_DIR)) {
+                    for (int i = 0; i < envVars.length; i++) {
+                        String keyValue = envVars[i];
+                        String[] split = keyValue.split("=", 2);
+                        if (split[1].startsWith(ContainerTemplate.DEFAULT_WORKING_DIR)) {
+                            // Container has a custom workingDir, update env vars with right workspace folder
+                            split[1] = split[1].replaceFirst(
+                                    ContainerTemplate.DEFAULT_WORKING_DIR, containerWorkingDirStr);
+                            envVars[i] = split[0] + "=" + split[1];
+                            LOGGER.log(
+                                    Level.FINEST,
+                                    "Updated the starter environment variable, key: {0}, Value: {1}",
+                                    new String[] {split[0], split[1]});
+                        }
+                    }
+                }
+
+                if (node != null) { // It seems this is possible despite the method javadoc saying it is non-null
+                    final Computer computer = node.toComputer();
+                    if (computer != null) {
+                        List<String> resultEnvVar = new ArrayList<>();
+                        try {
+                            EnvVars environment = computer.getEnvironment();
+                            if (environment != null) {
+                                Set<String> overriddenKeys = new HashSet<>();
+                                for (String keyValue : envVars) {
+                                    String[] split = keyValue.split("=", 2);
+                                    if (!split[1].equals(environment.get(split[0]))) {
+                                        // Only keep environment variables that differ from Computer's environment
+                                        resultEnvVar.add(keyValue);
+                                        overriddenKeys.add(split[0]);
+                                    }
+                                }
+
+                                // modify the working dir on envvars part of Computer
+                                if (!containerWorkingDirStr.equals(ContainerTemplate.DEFAULT_WORKING_DIR)) {
+                                    for (Map.Entry<String, String> entry : environment.entrySet()) {
+                                        if (entry.getValue().startsWith(ContainerTemplate.DEFAULT_WORKING_DIR)
+                                                && !overriddenKeys.contains(entry.getKey())) {
+                                            // Value should be overridden and is not overridden earlier
+                                            String newValue = entry.getValue()
+                                                    .replaceFirst(
+                                                            ContainerTemplate.DEFAULT_WORKING_DIR,
+                                                            containerWorkingDirStr);
+                                            String keyValue = entry.getKey() + "=" + newValue;
+                                            LOGGER.log(
+                                                    Level.FINEST,
+                                                    "Updated the value for envVar, key: {0}, Value: {1}",
+                                                    new String[] {entry.getKey(), newValue});
+                                            resultEnvVar.add(keyValue);
+                                        }
+                                    }
+                                }
+                                envVars = resultEnvVar.toArray(new String[resultEnvVar.size()]);
+                            }
+                        } catch (InterruptedException e) {
+                            throw new IOException("Unable to retrieve environment variables", e);
+                        }
+                    }
+                }
+                return doLaunch(
+                        starter.quiet(),
+                        fixDoubleDollar(envVars),
+                        starter.stdout(),
+                        containerWorkingDirFilePath,
+                        starter.masks(),
+                        getCommands(starter, containerWorkingDirFilePathStr, launcher.isUnix()));
+            }
+
+            private Proc doLaunch(
+                    boolean quiet,
+                    String[] cmdEnvs,
+                    OutputStream outputForCaller,
+                    FilePath pwd,
+                    boolean[] masks,
+                    String... commands)
+                    throws IOException {
+                long startMethod = System.nanoTime();
+
+                PrintStream printStream;
+                OutputStream stream;
+
+                // Only output to stdout at the beginning for diagnostics.
+                ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+                // Wrap stdout so that we can toggle it off.
+                ToggleOutputStream toggleStdout = new ToggleOutputStream(stdout);
+
+                // Do not send this command to the output when in quiet mode
+                if (quiet) {
+                    stream = toggleStdout;
+                    printStream = new PrintStream(stream, true, StandardCharsets.UTF_8);
+                } else {
+                    printStream = launcher.getListener().getLogger();
+                    stream = new TeeOutputStream(toggleStdout, printStream);
+                }
+
+                ByteArrayOutputStream dryRunCaller = null;
+                ;
+                ToggleOutputStream toggleDryRunCaller = null;
+                ToggleOutputStream toggleOutputForCaller = null;
+                // Send to proc caller as well if they sent one
+                if (outputForCaller != null && !outputForCaller.equals(printStream)) {
+                    if (launcher.isUnix()) {
+                        stream = new TeeOutputStream(outputForCaller, stream);
+                    } else {
+                        // Prepare to capture output for later.
+                        dryRunCaller = new ByteArrayOutputStream();
+                        toggleDryRunCaller = new ToggleOutputStream(dryRunCaller);
+                        // Initially disable the output for the caller, to prevent it from getting unwanted output such
+                        // as prompt
+                        toggleOutputForCaller = new ToggleOutputStream(outputForCaller, true);
+                        stream = new TeeOutputStream(toggleOutputForCaller, stream);
+                        stream = new TeeOutputStream(toggleDryRunCaller, stream);
+                    }
+                }
+
+                String[] sh = shell != null
+                        ? new String[] {shell}
+                        : launcher.isUnix() ? new String[] {"sh"} : new String[] {"cmd", "/Q"};
+                String msg = "Executing " + String.join(" ", sh) + " script inside container " + containerName
+                        + " of pod " + getPodName();
+                LOGGER.log(Level.FINEST, msg);
+                printStream.println(msg);
+
+                if (closables == null) {
+                    closables = new ArrayList<>();
+                }
+
+                int attempts = 0;
+                ExecWatchWrapper watchWrapper = null;
+                while (watchWrapper == null && attempts < WEBSOCKET_CONNECTION_MAX_RETRY) {
+
+                    if (attempts > 0) {
+                        // Exponential backoff: Waits 2s, next attempt 4s, next attempts 8s, next attempts 16s, ...
+                        // with a maximum of wait of WEBSOCKET_CONNECTION_MAX_RETRY_BACKOFF
+                        long backoffInSeconds = Math.min(
+                                Integer.toUnsignedLong((int) Math.pow(2, attempts)),
+                                WEBSOCKET_CONNECTION_MAX_RETRY_BACKOFF);
+                        launcher.getListener().getLogger().println("Retrying in " + backoffInSeconds + "s ...");
+                        try {
+                            Thread.sleep(backoffInSeconds * 1000);
+                        } catch (InterruptedException ex) {
+                            launcher.getListener().getLogger().println("Retry wait interrupted");
+                        } finally {
+                            launcher.getListener().getLogger().println("Retrying...");
+                        }
+                    }
+
+                    try {
+                        final AtomicBoolean alive = new AtomicBoolean(false);
+                        final CountDownLatch started = new CountDownLatch(1);
+                        final CountDownLatch finished = new CountDownLatch(1);
+                        final AtomicLong startAlive = new AtomicLong();
+
+                        ExecWatch watch = nodeContext
+                                .getPodResource()
+                                .inContainer(containerName)
+                                .redirectingInput(STDIN_BUFFER_SIZE) // JENKINS-50429
+                                .writingOutput(stream)
+                                .writingError(stream)
+                                .usingListener(new ExecListener() {
+                                    @Override
+                                    public void onOpen() {
+                                        alive.set(true);
+                                        started.countDown();
+                                        startAlive.set(System.nanoTime());
+                                        LOGGER.log(Level.FINEST, "onOpen : {0}", finished);
+                                    }
+
+                                    @Override
+                                    public void onFailure(Throwable t, Response response) {
+                                        alive.set(false);
+                                        t.printStackTrace(launcher.getListener().getLogger());
+                                        started.countDown();
+                                        LOGGER.log(Level.FINEST, "onFailure : {0}", finished);
+                                        if (finished.getCount() == 0) {
+                                            LOGGER.log(
+                                                    Level.WARNING,
+                                                    "onFailure called but latch already finished. This may be a bug in the kubernetes-plugin");
+                                        }
+                                        finished.countDown();
+                                    }
+
+                                    @Override
+                                    public void onClose(int i, String s) {
+                                        alive.set(false);
+                                        started.countDown();
+                                        LOGGER.log(Level.FINEST, "onClose : {0} [{1} ms]", new Object[] {
+                                            finished,
+                                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startAlive.get())
+                                        });
+                                        if (finished.getCount() == 0) {
+                                            LOGGER.log(
+                                                    Level.WARNING,
+                                                    "onClose called but latch already finished. This indicates a bug in the kubernetes-plugin");
+                                        }
+                                        finished.countDown();
+                                    }
+                                })
+                                .exec(sh);
+                        // prevent a wait forever if the connection is closed as the listener would never be called
+                        try {
+                            if (started.await(WEBSOCKET_CONNECTION_TIMEOUT, TimeUnit.SECONDS)) {
+                                watchWrapper = new ExecWatchWrapper(watch, alive, finished);
+                            } else {
+                                closeWatch(watch);
+                                launcher.getListener()
+                                        .error("Timed out waiting for websocket connection. "
+                                                + "You should increase the value of system property "
+                                                + WEBSOCKET_CONNECTION_TIMEOUT_SYSTEM_PROPERTY + " currently set at "
+                                                + WEBSOCKET_CONNECTION_TIMEOUT + " seconds");
+                            }
+                        } catch (InterruptedException e) {
+                            closeWatch(watch);
+                            throw e;
+                        }
+
+                    } catch (KubernetesAuthException e) {
+                        launcher.getListener().getLogger().print("Failed to authenticate with Kubernetes cluster: ");
+                        e.printStackTrace(launcher.getListener().getLogger());
+                        throw new AbortException("Failed to authenticate with Kubernetes cluster");
+                    } catch (KubernetesClientException e) {
+                        launcher.getListener().getLogger().print("Failed to start websocket connection: ");
+                        String message = e.getMessage();
+                        if (message != null && message.startsWith("container " + containerName + " not found in pod")) {
+                            launcher.getListener().getLogger().print(message);
+                            // Don't even retry if the container is invalid.
+                            throw e;
+                        }
+
+                        e.printStackTrace(launcher.getListener().getLogger());
+                    } catch (InterruptedException e) {
+                        launcher.getListener()
+                                .getLogger()
+                                .println(
+                                        "Failed to start websocket connection: "
+                                                + "Interrupted while waiting for websocket connection, you should consider increasing the Max connections to Kubernetes API.");
+                        e.printStackTrace(launcher.getListener().getLogger());
+                    } finally {
+                        attempts++;
+                    }
+                }
+
+                if (watchWrapper == null || watchWrapper.getExecWatch() == null) {
+                    throw new AbortException("Failed to start websocket connection after " + attempts
+                            + " attempts. Check logs above for more details.");
+                }
+
+                ExecWatch watch = watchWrapper.getExecWatch();
+                final AtomicBoolean alive = watchWrapper.getAlive();
+                final CountDownLatch finished = watchWrapper.getFinished();
+
+                try {
+                    // Depends on the ping time with the Kubernetes API server
+                    // Not fully satisfied with this solution because it can delay the execution
+                    if (finished.await(COMMAND_FINISHED_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                        launcher.getListener()
+                                .error(
+                                        "Process exited immediately after creation. See output below%n%s",
+                                        stdout.toString(StandardCharsets.UTF_8.name()));
+                        throw new AbortException(
+                                "Process exited immediately after creation. Check logs above for more details.");
+                    }
+                    toggleStdout.disable();
+                    OutputStream stdin = watch.getInput();
+                    PrintStream in = new PrintStream(stdin, true, StandardCharsets.UTF_8);
+                    if (!launcher.isUnix()) {
+                        in.print("@echo off");
+                        in.print(newLine(true));
+                    }
+                    if (pwd != null) {
+                        // We need to get into the project workspace.
+                        // The workspace is not known in advance, so we have to execute a cd command.
+                        in.printf("cd \"%s\"", pwd);
+                        in.print(newLine(!launcher.isUnix()));
+                    }
+
+                    EnvVars envVars = new EnvVars();
+
+                    // get global vars here, run the export first as they'll get overwritten.
+                    if (globalVars != null) {
+                        envVars.overrideAll(globalVars);
+                    }
+
+                    if (rcEnvVars != null) {
+                        envVars.overrideAll(rcEnvVars);
+                    }
+
+                    if (environmentExpander != null) {
+                        environmentExpander.expand(envVars);
+                    }
+
+                    // setup specific command envs passed into cmd
+                    if (cmdEnvs != null) {
+                        for (String cmdEnv : cmdEnvs) {
+                            envVars.addLine(cmdEnv);
+                        }
+                    }
+
+                    LOGGER.log(Level.FINEST, "Launching with env vars: {0}", envVars.toString());
+
+                    setupEnvironmentVariable(envVars, in, !launcher.isUnix());
+                    if (!launcher.isUnix() && toggleOutputForCaller != null) {
+                        // Windows welcome message should not be sent to the caller as it is a side-effect of calling
+                        // the wrapping cmd.exe
+                        // Microsoft Windows [Version 10.0.17763.2686]
+                        // (c) 2018 Microsoft Corporation. All rights reserved.
+                        //
+                        // C:\>
+                        stream.flush();
+                        long beginning = System.currentTimeMillis();
+                        // watch for the prompt character
+                        while (!dryRunCaller
+                                .toString(StandardCharsets.UTF_8.name())
+                                .contains(">")) {
+                            Thread.sleep(100);
+                        }
+                        LOGGER.log(
+                                Level.FINEST,
+                                "Windows prompt printed after " + (System.currentTimeMillis() - beginning) + " ms");
+                    }
+                    // We don't need to capture output anymore
+                    if (toggleDryRunCaller != null) {
+                        toggleDryRunCaller.disable();
+                    }
+                    // Clear any captured bytes
+                    if (dryRunCaller != null) {
+                        dryRunCaller.reset();
+                    }
+                    if (toggleOutputForCaller != null) {
+                        toggleOutputForCaller.enable();
+                    }
+                    doExec(in, !launcher.isUnix(), printStream, masks, commands);
+
+                    LOGGER.fine(() -> "Created process inside pod: [" + getPodName() + "], container: [" + containerName
+                            + "]" + "[" + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startMethod) + " ms]");
+                    ContainerExecProc proc = new ContainerExecProc(watch, alive, finished, stdin, printStream);
+                    closables.add(proc);
+                    return proc;
+                } catch (InterruptedException ie) {
+                    closeWatch(watch);
+                    throw new InterruptedIOException(ie.getMessage());
+                } catch (RuntimeException e) {
+                    closeWatch(watch);
+                    throw e;
+                }
+            }
+
+            @Override
+            public void kill(Map<String, String> modelEnvVars) throws IOException, InterruptedException {
+                getListener().getLogger().println("Killing processes");
+                String cookie = modelEnvVars.get(COOKIE_VAR);
+                int exitCode;
+                if (this.isUnix()) {
+                    exitCode = doLaunch(
+                                    true,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    "sh",
+                                    "-c",
+                                    "kill \\`grep -l '" + COOKIE_VAR + "=" + cookie
+                                            + "' /proc/*/environ | cut -d / -f 3 \\`")
+                            .join();
+                } else {
+                    VirtualChannel channel = node.getChannel();
+                    if (channel != null && workspace != null) {
+                        FilePath tmpFolder = WorkspaceList.tempDir(new FilePath(channel, workspace));
+                        if (tmpFolder != null) {
+                            try (var mainScript = withTemporaryScript(tmpFolder, "kill-processes-with-cookie.ps1");
+                                    var killProcessScript = withTemporaryScript(tmpFolder, "kill-process-by-id.ps1");
+                                    var csCode = withTemporaryScript(tmpFolder, "ProcessEnvironmentReader.cs")) {
+                                exitCode = doLaunch(
+                                                true,
+                                                null,
+                                                null,
+                                                null,
+                                                null,
+                                                "powershell.exe",
+                                                "-NoProfile",
+                                                "-File",
+                                                /* path to file may contain spaces so wrap in double quotes*/
+                                                "\"" + mainScript.getRemote() + "\"",
+                                                "-cookie",
+                                                cookie,
+                                                "-csFile",
+                                                "\"" + csCode.getRemote() + "\"",
+                                                "-killScript",
+                                                "\"" + killProcessScript.getRemote() + "\"")
+                                        .join();
+                            }
+                        } else {
+                            exitCode = 9099;
+                        }
+
+                    } else {
+                        exitCode = 9009;
+                    }
+                }
+                getListener()
+                        .getLogger()
+                        .println("Attempt to gracefully kill processes finished with exit code " + exitCode);
+            }
+
+            private void setupEnvironmentVariable(EnvVars vars, PrintStream out, boolean windows) throws IOException {
+                for (Map.Entry<String, String> entry : vars.entrySet()) {
+                    // Check that key is bash compliant.
+                    if (entry.getKey().matches("[a-zA-Z_][a-zA-Z0-9_]*")) {
+                        out.print(String.format(
+                                windows ? "set %s=%s" : "export %s='%s'",
+                                entry.getKey(),
+                                windows ? entry.getValue() : entry.getValue().replace("'", "'\\''")));
+                        out.print(newLine(windows));
+                    }
+                }
+            }
+
+            private static TemporaryFile withTemporaryScript(FilePath workspace, String name)
+                    throws IOException, InterruptedException {
+                return new TemporaryFile(workspace, name);
+            }
+        };
+    }
+
+    private static String newLine(boolean windows) {
+        return windows ? "\r\n" : "\n";
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (closables == null) return;
+
+        for (Closeable closable : closables) {
+            try {
+                closable.close();
+            } catch (Exception e) {
+                LOGGER.log(Level.FINE, "failed to close", e);
+            }
+        }
+    }
+
+    /**
+     * Wrapper of ExecWatch that also hold watch attributes for liveness and closure.
+     */
+    private static class ExecWatchWrapper {
+
+        /* the watch */
+        private final ExecWatch execWatch;
+        /* atomic boolean value for watch liveness */
+        private final AtomicBoolean alive;
+        /* count down latch value for watch exit */
+        private final CountDownLatch finished;
+
+        public ExecWatchWrapper(ExecWatch execWatch, AtomicBoolean alive, CountDownLatch finished) {
+            this.execWatch = execWatch;
+            this.alive = alive;
+            this.finished = finished;
+        }
+
+        public ExecWatch getExecWatch() {
+            return execWatch;
+        }
+
+        public AtomicBoolean getAlive() {
+            return alive;
+        }
+
+        public CountDownLatch getFinished() {
+            return finished;
+        }
+    }
+
+    private static class ToggleOutputStream extends FilterOutputStream {
+        private boolean disabled;
+
+        public ToggleOutputStream(OutputStream out) {
+            this(out, false);
+        }
+
+        public ToggleOutputStream(OutputStream out, boolean disabled) {
+            super(out);
+            this.disabled = disabled;
+        }
+
+        public void disable() {
+            disabled = true;
+        }
+
+        public void enable() {
+            disabled = false;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            if (!disabled) {
+                out.write(b);
+            }
+        }
+
+        @Override
+        public void write(byte[] b) throws IOException {
+            if (!disabled) {
+                out.write(b);
+            }
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            if (!disabled) {
+                out.write(b, off, len);
+            }
+        }
+    }
+
+    /**
+     * Process given stream and mask as specified by the bitfield.
+     * Uses space as a separator to determine which fragments to hide.
+     */
+    private static class MaskOutputStream extends FilterOutputStream {
+        private static final String MASK_STRING = "********";
+
+        private final boolean[] masks;
+        private static final char SEPARATOR = ' ';
+        private int index;
+        private boolean wrote;
+
+        public MaskOutputStream(OutputStream out, boolean[] masks) {
+            super(out);
+            this.masks = masks;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            if (masks == null || index >= masks.length) {
+                out.write(b);
+            } else if (isSeparator(b)) {
+                out.write(b);
+                index++;
+                wrote = false;
+            } else if (masks[index]) {
+                if (!wrote) {
+                    wrote = true;
+                    for (char c : MASK_STRING.toCharArray()) {
+                        out.write(c);
+                    }
+                }
+            } else {
+                out.write(b);
+            }
+        }
+
+        private boolean isSeparator(int b) {
+            return b == SEPARATOR;
+        }
+    }
+
+    private static void doExec(
+            PrintStream in, boolean windows, PrintStream out, boolean[] masks, String... statements) {
+        long start = System.nanoTime();
+        // For logging
+        ByteArrayOutputStream loggingOutput = new ByteArrayOutputStream();
+        // Tee both outputs
+        TeeOutputStream teeOutput = new TeeOutputStream(out, loggingOutput);
+        // Mask sensitive output
+        MaskOutputStream maskedOutput = new MaskOutputStream(teeOutput, masks);
+        // Tee everything together
+        PrintStream tee;
+        try {
+            String encoding = StandardCharsets.UTF_8.name();
+            tee = new PrintStream(new TeeOutputStream(in, maskedOutput), false, encoding);
+            // To output things that shouldn't be considered for masking
+            PrintStream unmasked = new PrintStream(teeOutput, false, encoding);
+            unmasked.print("Executing command: ");
+            for (String statement : statements) {
+                if (windows) {
+                    tee.append(statement).append(" ");
+                } else {
+                    tee.append("\"").append(statement).append("\" ");
+                }
+            }
+            tee.print(newLine(windows));
+            LOGGER.log(
+                    Level.FINEST,
+                    loggingOutput.toString(encoding) + "[" + TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - start)
+                            + " μs." + "]");
+            // We need to exit so that we know when the command has finished.
+            tee.print(EXIT);
+            tee.print(newLine(windows));
+            tee.flush();
+        } catch (UnsupportedEncodingException e) {
+            LOGGER.log(Level.SEVERE, "Failed to execute command because of unsupported encoding", e);
+        }
+    }
+
+    static String[] getCommands(Launcher.ProcStarter starter, String containerWorkingDirStr, boolean unix) {
+        List<String> allCommands = new ArrayList<String>();
+
+        for (String cmd : starter.cmds()) {
+            // BourneShellScript.launchWithCookie escapes $ as $$, we convert it to \$
+            String fixedCommand = cmd.replaceAll("\\$\\$", Matcher.quoteReplacement("\\$"));
+            if (unix) {
+                fixedCommand = fixedCommand.replaceAll("\\\"", Matcher.quoteReplacement("\\\""));
+            }
+
+            String oldRemoteDir = null;
+            FilePath oldRemoteDirFilepath = starter.pwd();
+            if (oldRemoteDirFilepath != null) {
+                oldRemoteDir = oldRemoteDirFilepath.getRemote();
+            }
+            if (oldRemoteDir != null
+                    && !oldRemoteDir.isEmpty()
+                    && !oldRemoteDir.equals(containerWorkingDirStr)
+                    && fixedCommand.contains(oldRemoteDir)) {
+                // Container has a custom workingDir, update the dir in commands
+                fixedCommand = fixedCommand.replaceAll(oldRemoteDir, containerWorkingDirStr);
+            }
+            allCommands.add(fixedCommand);
+        }
+        return allCommands.toArray(new String[allCommands.size()]);
+    }
+
+    private static void closeWatch(ExecWatch watch) {
+        try {
+            watch.close();
+        } catch (Exception e) {
+            LOGGER.log(Level.INFO, "failed to close watch", e);
+        }
+    }
+
+    @Deprecated
+    public void setKubernetesClient(KubernetesClient client) {
+        // NOOP
+    }
+
+    private static String[] fixDoubleDollar(String[] envVars) {
+        return Arrays.stream(envVars)
+                .map(ev -> ev.replaceAll("\\$\\$", Matcher.quoteReplacement("$")))
+                .toArray(String[]::new);
+    }
+
+    private static final class TemporaryFile implements AutoCloseable {
+        @NonNull
+        final FilePath filePath;
+
+        TemporaryFile(@NonNull FilePath workspace, @NonNull String name) throws IOException, InterruptedException {
+            var resource = ContainerExecDecorator.class.getResource("scripts/" + name);
+            if (resource == null) {
+                throw new FileNotFoundException("Script " + name + " not found in resources!");
+            }
+            var tempFile =
+                    workspace.createTempFile(FilenameUtils.getBaseName(name), "." + FilenameUtils.getExtension(name));
+            tempFile.copyFrom(resource);
+            this.filePath = tempFile;
+        }
+
+        public String getRemote() {
+            return filePath.getRemote();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (!(o instanceof TemporaryFile that)) return false;
+            return Objects.equals(filePath, that.filePath);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(filePath);
+        }
+
+        @Override
+        public void close() throws IOException, InterruptedException {
+            filePath.delete();
+        }
+    }
+}

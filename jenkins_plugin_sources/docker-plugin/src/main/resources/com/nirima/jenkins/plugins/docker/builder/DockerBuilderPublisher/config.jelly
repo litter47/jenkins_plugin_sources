@@ -1,0 +1,54 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form" xmlns:c="/lib/credentials">
+
+    <f:entry title="Directory for Dockerfile" field="dockerFileDirectory"
+             description="Location to look for the Dockerfile in, which is used to build the image.">
+        <f:textbox />
+    </f:entry>
+
+    <f:advanced>
+        <f:block>
+        Credentials to pull image from upstream registry
+        </f:block>
+        <f:entry title="${%Registry Credentials}">
+            <f:property field="fromRegistry"/>
+        </f:entry>
+    </f:advanced>
+
+    <f:entry title="Cloud" field="cloud" description="Cloud to use to build image">
+        <f:select/>
+    </f:entry>
+
+    <f:entry title="Image" field="tagsString">
+        <f:expandableTextbox/>
+    </f:entry>
+
+    <f:entry title="${%Build Args}" field="buildArgsString">
+        <f:expandableTextbox/>
+    </f:entry>
+
+    <f:entry title="${%Push image}" field="pushOnSuccess">
+        <f:checkbox/>
+    </f:entry>
+    
+    <f:entry title="${%Registry Credentials}" field="pushCredentialsId">
+        <c:select/>
+    </f:entry>
+
+    <f:entry title="${%Clean local images}" field="cleanImages">
+        <f:checkbox default="false"/>
+    </f:entry>
+
+    <f:entry title="${%Attempt to remove images when jenkins deletes the run}" field="cleanupWithJenkinsJobDelete">
+        <f:checkbox default="false"/>
+    </f:entry>
+
+    <f:entry title="${%Disable caching}" field="noCache">
+        <f:checkbox default="false"/>
+    </f:entry>
+
+    <f:entry title="${%Pull base image}" field="pull">
+        <f:checkbox default="false"/>
+    </f:entry>
+
+</j:jelly>

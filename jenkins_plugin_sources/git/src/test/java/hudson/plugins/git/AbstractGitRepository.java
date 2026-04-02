@@ -1,0 +1,80 @@
+package hudson.plugins.git;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+import hudson.plugins.git.util.GitUtilsTest;
+import jenkins.plugins.git.junit.jupiter.WithGitSampleRepo;
+import org.eclipse.jgit.util.SystemReader;
+import org.junit.jupiter.api.BeforeEach;
+import hudson.model.TaskListener;
+import hudson.util.StreamTaskListener;
+
+import jenkins.plugins.git.GitSampleRepoRule;
+
+import org.jenkinsci.plugins.gitclient.Git;
+import org.jenkinsci.plugins.gitclient.GitClient;
+
+/**
+ * Temporary git repository for use with tests. Tests which need a git
+ * repository but do not need a running Jenkins instance should extend this
+ * class so that repository setup and teardown are handled for them.
+ *
+ * Provides convenience methods for various repository functions.
+ *
+ * @author Mark Waite
+ */
+@WithGitSampleRepo
+public abstract class AbstractGitRepository {
+
+    protected File testGitDir;
+    protected GitClient testGitClient;
+
+    protected GitSampleRepoRule repo;
+
+    @BeforeEach
+    protected void beforeEach(GitSampleRepoRule repo) throws Exception {
+        this.repo = repo;
+        SystemReader.getInstance().getUserConfig().clear();
+        TaskListener listener = StreamTaskListener.fromStderr();
+        repo.init();
+        testGitDir = repo.getRoot();
+        testGitClient = Git.with(listener, GitUtilsTest.getConfigNoSystemEnvsVars()).in(testGitDir).getClient();
+    }
+
+    /**
+     * Commit fileName to this git repository
+     *
+     * @param fileName name of file to create
+     * @throws GitException on git error
+     * @throws InterruptedException when interrupted
+     */
+    protected void commitNewFile(final String fileName) throws GitException, InterruptedException {
+        File newFile = new File(testGitDir, fileName);
+        assert !newFile.exists(); // Not expected to use commitNewFile to update existing file
+        try (PrintWriter writer = new PrintWriter(newFile, StandardCharsets.UTF_8)) {
+            writer.println("A file named " + fileName);
+            writer.close();
+            testGitClient.add(fileName);
+            testGitClient.commit("Added a file named " + fileName);
+        } catch (IOException notFound) {
+            throw new GitException(notFound);
+        }
+    }
+
+    /**
+     * Returns list of UserRemoteConfig for this repository.
+     *
+     * @return list of UserRemoteConfig for this repository
+     * @throws IOException on input or output error
+     */
+    protected List<UserRemoteConfig> remoteConfigs() throws IOException {
+        List<UserRemoteConfig> list = new ArrayList<>();
+        list.add(new UserRemoteConfig(testGitDir.getAbsolutePath(), "origin", "", null));
+        return list;
+    }
+}

@@ -1,0 +1,49 @@
+{"pipeline": {
+  "stages": [  {
+    "name": "foo",
+    "branches": [    {
+      "name": "default",
+      "steps":       [
+        {
+          "name": "sh",
+          "arguments": [          {
+            "key": "script",
+            "value":             {
+              "isLiteral": true,
+              "value": "cat /usr/local/apache2/conf/extra/httpd-userdir.conf"
+            }
+          }]
+        },
+        {
+          "name": "sh",
+          "arguments": [          {
+            "key": "script",
+            "value":             {
+              "isLiteral": true,
+              "value": "echo \"The answer is 42\""
+            }
+          }]
+        }
+      ]
+    }]
+  }],
+  "agent":   {
+    "type": "node",
+    "arguments":     [
+      {
+        "key": "label",
+        "value":         {
+          "isLiteral": true,
+          "value": "some-label"
+        }
+      },
+      {
+        "key": "customWorkspace",
+        "value":         {
+          "isLiteral": true,
+          "value": null
+        }
+      }
+    ]
+  }
+}}

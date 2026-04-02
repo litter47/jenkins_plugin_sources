@@ -1,0 +1,40 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form" xmlns:c="/lib/credentials" >
+
+    <f:entry title="${%Name}" field="name">
+        <f:textbox default="docker"/>
+    </f:entry>
+
+    <f:advanced title="${%Docker Cloud details}" align="left">
+
+        <f:property field="dockerApi"/>
+
+        <f:property field="disabled"/>
+
+        <f:entry title="${%Error Duration}" field="errorDuration">
+            <f:number />
+        </f:entry>
+
+        <f:entry title="${%Expose DOCKER_HOST}" field="exposeDockerHost">
+            <f:checkbox/>
+        </f:entry>
+
+        <f:entry title="${%Container Cap}" field="containerCap">
+            <f:number default="100"/>
+        </f:entry>
+
+    </f:advanced>
+
+    <f:advanced title="${%Docker Agent templates}" align="left">
+        <f:entry title="${%Docker Agent templates}" description="${%List of Images to be launched as agents}">
+            <f:repeatableProperty field="templates" header="Docker Agent templates" add="Add Docker Template">
+                <f:block>
+                    <div align="right">
+                        <f:repeatableDeleteButton value="Delete Docker Template" />
+                    </div>
+                </f:block>
+            </f:repeatableProperty>
+        </f:entry>
+    </f:advanced>
+
+</j:jelly>

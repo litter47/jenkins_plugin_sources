@@ -1,0 +1,110 @@
+/*
+ * The MIT License
+ *
+ * Copyright (c) 2021 CloudBees, Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ */
+package jenkins.plugins.git;
+
+import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.Extension;
+import hudson.model.PersistentDescriptor;
+import hudson.plugins.git.GitException;
+import hudson.remoting.Channel;
+import jenkins.model.GlobalConfiguration;
+import jenkins.model.GlobalConfigurationCategory;
+import org.eclipse.jgit.lib.Repository;
+import org.jenkinsci.Symbol;
+import org.jenkinsci.plugins.gitclient.GitClient;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
+
+import java.io.IOException;
+
+
+@Extension @Symbol("gitHooks") @Restricted(NoExternalUse.class)
+public class GitHooksConfiguration extends GlobalConfiguration implements PersistentDescriptor {
+
+    private boolean allowedOnController = false;
+    private boolean allowedOnAgents = false;
+
+    @NonNull
+    public static GitHooksConfiguration get() {
+        final GitHooksConfiguration configuration = GlobalConfiguration.all().get(GitHooksConfiguration.class);
+        if (configuration == null) {
+            throw new IllegalStateException("[BUG] No configuration registered, make sure not running on an agent or that Jenkins has started properly.");
+        }
+        return configuration;
+    }
+
+    public boolean isAllowedOnController() {
+        return allowedOnController;
+    }
+
+    public void setAllowedOnController(final boolean allowedOnController) {
+        this.allowedOnController = allowedOnController;
+        save();
+    }
+
+    public boolean isAllowedOnAgents() {
+        return allowedOnAgents;
+    }
+
+    public void setAllowedOnAgents(final boolean allowedOnAgents) {
+        this.allowedOnAgents = allowedOnAgents;
+        save();
+    }
+
+    @Override @NonNull
+    public GlobalConfigurationCategory getCategory() {
+        return GlobalConfigurationCategory.get(GlobalConfigurationCategory.Security.class);
+    }
+
+    public static void configure(GitClient client) throws GitException, IOException, InterruptedException {
+        final GitHooksConfiguration configuration = GitHooksConfiguration.get();
+        configure(client, configuration.isAllowedOnController(), configuration.isAllowedOnAgents());
+    }
+
+    public static void configure(GitClient client, final boolean allowedOnController, final boolean allowedOnAgents) throws GitException, IOException, InterruptedException {
+        if (Channel.current() == null) {
+            //Running on controller
+            try (Repository ignored = client.getRepository()){
+                //That went well, so the code runs on the controller and the repo is local
+                configure(client, allowedOnController);
+            } catch (UnsupportedOperationException e) {
+                // Client represents a remote repository, so this code runs on the controller but the repo is on an agent
+                configure(client, allowedOnAgents);
+            }
+        } else {
+            //Running on agent
+            configure(client, allowedOnAgents);
+        }
+    }
+
+    public static void configure(GitClient client, final boolean allowed) throws GitException, IOException, InterruptedException {
+        if (!allowed) {
+            client.withRepository(new DisableHooks());
+        } else {
+            client.withRepository(new UnsetHooks());
+        }
+    }
+
+}

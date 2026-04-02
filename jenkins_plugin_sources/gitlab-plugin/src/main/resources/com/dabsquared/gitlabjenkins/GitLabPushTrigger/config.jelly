@@ -1,0 +1,111 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core"
+         xmlns:f="/lib/form"
+         xmlns:st="jelly:stapler">
+  <f:entry title="Enabled GitLab triggers">
+    <div>
+      <f:entry title="Push Events" field="triggerOnPush">
+        <f:checkbox default="true"/>
+      </f:entry>
+      <f:entry title="Push Events in case of branch delete" field="triggerToBranchDeleteRequest">
+        <f:checkbox default="false"/>
+      </f:entry>
+      <f:entry title="Opened Merge Request Events" field="triggerOnMergeRequest">
+        <f:checkbox default="true"/>
+      </f:entry>
+      <f:entry title="Build only if new commits were pushed to Merge Request" field="triggerOnlyIfNewCommitsPushed"
+      help="/plugin/gitlab-plugin/help/help-triggerOnlyIfNewCommitsPushed.html">
+        <f:checkbox default="false"/>
+      </f:entry>
+      <f:entry title="Accepted Merge Request Events" field="triggerOnAcceptedMergeRequest">
+        <f:checkbox default="false"/>
+      </f:entry>
+      <f:entry title="Closed Merge Request Events" field="triggerOnClosedMergeRequest">
+        <f:checkbox default="false"/>
+      </f:entry>
+      <f:entry title="Rebuild open Merge Requests" field="triggerOpenMergeRequestOnPush">
+        <f:select/>
+      </f:entry>
+      <f:entry title="Approved Merge Requests (EE-only)" field="triggerOnApprovedMergeRequest">
+        <f:checkbox default="true"/>
+      </f:entry>
+      <f:entry title="Comments" field="triggerOnNoteRequest">
+        <f:checkbox default="true"/>
+      </f:entry>
+      <f:entry title="Comment (regex) for triggering a build" help="/plugin/gitlab-plugin/help/help-noteRegex.html">
+        <f:textbox field="noteRegex" default="Jenkins please retry a build"/>
+      </f:entry>
+    </div>
+  </f:entry>
+  <f:advanced>
+    <f:entry title="Enable [ci-skip]" field="ciSkip">
+      <f:checkbox default="true"/>
+    </f:entry>
+    <f:entry title="${%Ignore WIP Merge Requests}" field="skipWorkInProgressMergeRequest">
+      <f:checkbox default="true"/>
+    </f:entry>
+    <f:entry title="Labels that launch a build if they are added (comma-separated)" help="/plugin/gitlab-plugin/help/help-labelsThatForcesBuildIfAdded.html">
+      <f:textbox field="labelsThatForcesBuildIfAdded"/>
+    </f:entry>
+    <f:entry title="Set build description to build cause (eg. Merge request or Git Push)" field="setBuildDescription">
+      <f:checkbox default="true"/>
+    </f:entry>
+    <f:entry title="Build on successful pipeline events" field="triggerOnPipelineEvent">
+      <f:checkbox default="false"/>
+    </f:entry>
+    <f:entry title="Pending build name for pipeline" help="/plugin/gitlab-plugin/help/help-pendingBuildName.html">
+      <f:textbox field="pendingBuildName"/>
+    </f:entry>
+    <f:entry title="Cancel pending merge request builds on update" field="cancelPendingBuildsOnUpdate">
+      <f:checkbox default="false"/>
+    </f:entry>
+
+    <f:entry title="Allowed branches">
+      <div>
+        <!--<f:section title="">-->
+        <f:radioBlock name="branchFilterType" value="All" title="Allow all branches to trigger this job"
+                      checked="${instance.branchFilterType == null || instance.branchFilterType == 'All'}"
+                      inline="true" help="/plugin/gitlab-plugin/help/help-noBranchFiltering.html"/>
+        <f:radioBlock name="branchFilterType" value="NameBasedFilter" title="Filter branches by name"
+                      checked="${instance.branchFilterType == 'NameBasedFilter'}" inline="true"
+                      help="/plugin/gitlab-plugin/help/help-allowedBranches.html">
+          <f:entry title="Include">
+            <f:textbox name="includeBranchesSpec" field="includeBranchesSpec" autoCompleteDelimChar=","/>
+          </f:entry>
+          <f:entry title="Exclude">
+            <f:textbox name="excludeBranchesSpec" field="excludeBranchesSpec" autoCompleteDelimChar=","/>
+          </f:entry>
+        </f:radioBlock>
+
+        <f:radioBlock name="branchFilterType" value="RegexBasedFilter" title="Filter branches by regex"
+                      checked="${instance.branchFilterType == 'RegexBasedFilter'}" inline="true"
+                      help="/plugin/gitlab-plugin/help/help-filterBranchesByRegex.html">
+          <f:entry title="Source Branch Regex">
+            <f:textbox name="sourceBranchRegex" field="sourceBranchRegex"/>
+          </f:entry>
+          <f:entry title="Target Branch Regex">
+            <f:textbox name="targetBranchRegex" field="targetBranchRegex"/>
+          </f:entry>
+        </f:radioBlock>
+        <!--</f:section> -->
+        <f:optionalBlock title="${%Filter merge request by label}" field="mergeRequestLabelFilterConfig"
+                         checked="${instance.mergeRequestLabelFilterConfig != null}">
+          <f:entry title="${%Include}">
+            <f:textbox field="includeMergeRequestLabels" name="include" value="${instance.mergeRequestLabelFilterConfig.include}"
+                       autoCompleteDelimChar=","/>
+          </f:entry>
+          <f:entry title="${%Exclude}">
+            <f:textbox field="excludeMergeRequestLabels" name="exclude" value="${instance.mergeRequestLabelFilterConfig.exclude}"
+                       autoCompleteDelimChar=","/>
+          </f:entry>
+        </f:optionalBlock>
+      </div>
+    </f:entry>
+    <f:entry title="${%Secret token}" help="/plugin/gitlab-plugin/help/help-secretToken.html">
+      <st:adjunct includes="com.dabsquared.gitlabjenkins.GitLabPushTrigger.adjunct"/>
+      <f:readOnlyTextbox field="secretToken" id="gitlab_plugin_secretToken"/>
+      <button class="jenkins-button gitlab_plugin-generate jenkins-!-margin-right-1 jenkins-!-margin-top-1">${%Generate}</button>
+      <button class="jenkins-button gitlab_plugin-clear jenkins-!-margin-top-1">${%Clear}</button>
+    </f:entry>
+  </f:advanced>
+</j:jelly>

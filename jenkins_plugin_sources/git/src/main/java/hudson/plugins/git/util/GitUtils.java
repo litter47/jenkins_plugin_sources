@@ -1,0 +1,411 @@
+package hudson.plugins.git.util;
+
+import hudson.EnvVars;
+import hudson.FilePath;
+import hudson.Launcher;
+import hudson.model.*;
+import hudson.plugins.git.Branch;
+import hudson.plugins.git.BranchSpec;
+import hudson.plugins.git.GitException;
+import hudson.plugins.git.GitObject;
+import hudson.plugins.git.GitTool;
+import hudson.plugins.git.Revision;
+import hudson.remoting.VirtualChannel;
+import hudson.slaves.NodeProperty;
+import jenkins.model.Jenkins;
+import org.eclipse.jgit.lib.Constants;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.jenkinsci.plugins.gitclient.GitClient;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.Serial;
+import java.io.Serializable;
+import java.text.MessageFormat;
+import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import edu.umd.cs.findbugs.annotations.CheckForNull;
+import edu.umd.cs.findbugs.annotations.NonNull;
+
+public class GitUtils implements Serializable {
+    
+    @NonNull
+    GitClient git;
+    @NonNull
+    TaskListener listener;
+
+    public GitUtils(@NonNull TaskListener listener, @NonNull GitClient git) {
+        this.git = git;
+        this.listener = listener;
+    }
+
+    /**
+     * Resolves Git Tool by name.
+     * @param gitTool Tool name. If {@code null}, default tool will be used (if exists)
+     * @param builtOn Node for which the tool should be resolved
+     *                Can be {@link Jenkins#getInstance()} when running on controller
+     * @param env Additional environment variables
+     * @param listener Event listener
+     * @return Tool installation or {@code null} if it cannot be resolved
+     * @since 4.0.0
+     */
+    @CheckForNull
+    public static GitTool resolveGitTool(@CheckForNull String gitTool,
+                                         @CheckForNull Node builtOn,
+                                         @CheckForNull EnvVars env,
+                                         @NonNull TaskListener listener) {
+        GitTool git = gitTool == null
+                ? GitTool.getDefaultInstallation()
+                : Jenkins.get().getDescriptorByType(GitTool.DescriptorImpl.class).getInstallation(gitTool);
+        if (git == null) {
+            listener.getLogger().println("Selected Git installation does not exist. Using Default");
+            git = GitTool.getDefaultInstallation();
+        }
+        if (git != null) {
+            if (builtOn != null) {
+                try {
+                    git = git.forNode(builtOn, listener);
+                } catch (IOException | InterruptedException e) {
+                    listener.getLogger().println("Failed to get git executable");
+                }
+            }
+            if (env != null) {
+                git = git.forEnvironment(env);
+            }
+        }
+        return git;
+    }
+
+    /**
+     * Resolves Git Tool by name in a node-agnostic way.
+     * Use {@link #resolveGitTool(String, Node, EnvVars, TaskListener)} when the node is known
+     * @param gitTool Tool name. If {@code null}, default tool will be used (if exists)
+     * @param listener Event listener
+     * @return Tool installation or {@code null} if it cannot be resolved
+     * @since 4.0.0
+     */
+    @CheckForNull
+    public static GitTool resolveGitTool(@CheckForNull String gitTool, @NonNull TaskListener listener) {
+        return resolveGitTool(gitTool, null, null, listener);
+    }
+
+    public static Node workspaceToNode(FilePath workspace) {
+        Jenkins j = Jenkins.get();
+        if (workspace != null && workspace.isRemote()) {
+            for (Computer c : j.getComputers()) {
+                if (c.getChannel() == workspace.getChannel()) {
+                    Node n = c.getNode();
+                    if (n != null) {
+                        return n;
+                    }
+                }
+            }
+        }
+        return j;
+    }
+
+    /**
+     * Return a list of "Revisions" - where a revision knows about all the branch names that refer to
+     * a SHA1.
+     * @return list of revisions
+     * @throws IOException on input or output error
+     * @throws GitException on git error
+     * @throws InterruptedException when interrupted
+     */
+    public Collection<Revision> getAllBranchRevisions() throws GitException, IOException, InterruptedException {
+        Map<ObjectId, Revision> revisions = new HashMap<>();
+        for (Branch b : git.getRemoteBranches()) {
+            Revision r = revisions.get(b.getSHA1());
+            if (r == null) {
+                r = new Revision(b.getSHA1());
+                revisions.put(b.getSHA1(), r);
+            }
+            r.getBranches().add(b);
+        }
+        for (GitObject tagEntry : git.getTags()) {
+            String tagRef = Constants.R_TAGS + tagEntry.getName();
+            ObjectId objectId = tagEntry.getSHA1();
+            Revision r = revisions.get(objectId);
+            if (r == null) {
+                r = new Revision(objectId);
+                revisions.put(objectId, r);
+            }
+            r.getBranches().add(new Branch(tagRef, objectId));
+        }
+        return revisions.values();
+    }
+
+    /**
+     * Return the revision containing the branch name.
+     * @param branchName name of branch to be searched
+     * @return revision containing branchName
+     * @throws IOException on input or output error
+     * @throws GitException on git error
+     * @throws InterruptedException when interrupted
+     */
+    public Revision getRevisionContainingBranch(String branchName) throws GitException, IOException, InterruptedException {
+        for(Revision revision : getAllBranchRevisions()) {
+            for(Branch b : revision.getBranches()) {
+                if(b.getName().equals(branchName)) {
+                    return revision;
+                }
+            }
+        }
+        return null;
+    }
+
+    public Revision getRevisionForSHA1(ObjectId sha1) throws GitException, IOException, InterruptedException {
+        for(Revision revision : getAllBranchRevisions()) {
+            if(revision.getSha1().equals(sha1))
+                return revision;
+        }
+        return new Revision(sha1);
+    }
+
+    public Revision sortBranchesForRevision(Revision revision, List<BranchSpec> branchOrder) {
+        EnvVars env = new EnvVars();
+        return sortBranchesForRevision(revision, branchOrder, env);
+    }
+
+    public Revision sortBranchesForRevision(Revision revision, List<BranchSpec> branchOrder, EnvVars env) {
+        ArrayList<Branch> orderedBranches = new ArrayList<>(revision.getBranches().size());
+        ArrayList<Branch> revisionBranches = new ArrayList<>(revision.getBranches());
+
+        for(BranchSpec branchSpec : branchOrder) {
+            for (Iterator<Branch> i = revisionBranches.iterator(); i.hasNext();) {
+                Branch b = i.next();
+                if (branchSpec.matches(b.getName(), env)) {
+                    i.remove();
+                    orderedBranches.add(b);
+                }
+            }
+        }
+
+        orderedBranches.addAll(revisionBranches);
+        return new Revision(revision.getSha1(), orderedBranches);
+    }
+
+    /**
+     * Return a list of 'tip' branches (I.E. branches that aren't included entirely within another branch).
+     *
+     * @param revisions branches to be included in the search for tip branches
+     * @return filtered tip branches
+     * @throws InterruptedException when interrupted
+     */
+    public List<Revision> filterTipBranches(final Collection<Revision> revisions) throws GitException, InterruptedException {
+        // If we have 3 branches that we might want to build
+        // ----A--.---.--- B
+        //        \-----C
+
+        // we only want (B) and (C), as (A) is an ancestor (old).
+        final List<Revision> l = new ArrayList<>(revisions);
+
+        // Bypass any rev walks if only one branch or less
+        if (l.size() <= 1)
+            return l;
+
+        try {
+            return git.withRepository((Repository repo, VirtualChannel channel) -> {
+                // Commit nodes that we have already reached
+                Set<RevCommit> visited = new HashSet<>();
+                // Commits nodes that are tips if we don't reach them walking back from
+                // another node
+                Map<RevCommit, Revision> tipCandidates = new HashMap<>();
+
+                long calls = 0;
+                final long start = System.currentTimeMillis();
+
+                final boolean log = LOGGER.isLoggable(Level.FINE);
+
+                if (log)
+                    LOGGER.fine(MessageFormat.format(
+                            "Computing merge base of {0}  branches", l.size()));
+
+                try (RevWalk walk = new RevWalk(repo)) {
+                    walk.setRetainBody(false);
+
+                    // Each commit passed in starts as a potential tip.
+                    // We walk backwards in the commit's history, until we reach the
+                    // beginning or a commit that we have already visited. In that case,
+                    // we mark that one as not a potential tip.
+                    for (Revision r : revisions) {
+                        walk.reset();
+                        RevCommit head = walk.parseCommit(r.getSha1());
+
+                        if (visited.contains(head)) {
+                            continue;
+                        }
+
+                        tipCandidates.put(head, r);
+
+                        walk.markStart(head);
+                        for (RevCommit commit : walk) {
+                            calls++;
+                            if (visited.contains(commit)) {
+                                tipCandidates.remove(commit);
+                                break;
+                            }
+                            visited.add(commit);
+                        }
+                    }
+                }
+
+                if (log)
+                    LOGGER.fine(MessageFormat.format(
+                            "Computed merge bases in {0} commit steps and {1} ms", calls,
+                            (System.currentTimeMillis() - start)));
+
+                return new ArrayList<>(tipCandidates.values());
+            });
+        } catch (IOException e) {
+            throw new GitException("Error computing merge base", e);
+        }
+    }
+
+    public static EnvVars getPollEnvironment(AbstractProject p, FilePath ws, Launcher launcher, TaskListener listener)
+        throws IOException, InterruptedException {
+        return getPollEnvironment(p, ws, launcher, listener, true);
+    }
+
+
+    /**
+     * An attempt to generate at least semi-useful EnvVars for polling calls, based on previous build.
+     * Cribbed from various places.
+     * @param p abstract project to be considered
+     * @param ws workspace to be considered
+     * @param launcher launcher to use for calls to nodes
+     * @param listener build log
+     * @param reuseLastBuildEnv true if last build environment should be considered
+     * @return environment variables from previous build to be used for polling
+     * @throws IOException on input or output error
+     * @throws InterruptedException when interrupted
+     */
+    public static EnvVars getPollEnvironment(AbstractProject p, FilePath ws, Launcher launcher, TaskListener listener, boolean reuseLastBuildEnv)
+        throws IOException,InterruptedException {
+        EnvVars env = null;
+        StreamBuildListener buildListener = new StreamBuildListener((OutputStream)listener.getLogger());
+        AbstractBuild b = p.getLastBuild();
+
+        if (b == null) {
+            // If there is no last build, we need to trigger a new build anyway, and
+            // GitSCM.compareRemoteRevisionWithImpl() will short-circuit and never call this code
+            // ("No previous build, so forcing an initial build.").
+            throw new IllegalArgumentException("Last build must not be null. If there really is no last build, " +
+                    "a new build should be triggered without polling the SCM.");
+        }
+
+        if (reuseLastBuildEnv) {
+            Node lastBuiltOn = b.getBuiltOn();
+
+            if (lastBuiltOn != null) {
+                Computer lastComputer = lastBuiltOn.toComputer();
+                if (lastComputer != null) {
+                    env = lastComputer.getEnvironment().overrideAll(b.getCharacteristicEnvVars());
+                    for (NodeProperty nodeProperty : lastBuiltOn.getNodeProperties()) {
+                        Environment environment = nodeProperty.setUp(b, launcher, buildListener);
+                        if (environment != null) {
+                            environment.buildEnvVars(env);
+                        }
+                    }
+                }
+            }
+            if (env == null) {
+                env = p.getEnvironment(workspaceToNode(ws), listener);
+            }
+
+            p.getScm().buildEnvironment(b,env);
+        } else {
+            env = p.getEnvironment(workspaceToNode(ws), listener);
+        }
+
+        Jenkins jenkinsInstance = Jenkins.get();
+        if (jenkinsInstance == null) {
+            throw new IllegalArgumentException("Jenkins instance is null");
+        }
+        String rootUrl = jenkinsInstance.getRootUrl();
+        if(rootUrl!=null) {
+            env.put("HUDSON_URL", rootUrl); // Legacy.
+            env.put("JENKINS_URL", rootUrl);
+            env.put("BUILD_URL", rootUrl+b.getUrl());
+            env.put("JOB_URL", rootUrl+p.getUrl());
+        }
+
+        if(!env.containsKey("HUDSON_HOME")) // Legacy
+            env.put("HUDSON_HOME", jenkinsInstance.getRootDir().getPath() );
+
+        if(!env.containsKey("JENKINS_HOME"))
+            env.put("JENKINS_HOME", jenkinsInstance.getRootDir().getPath() );
+
+        if (ws != null)
+            env.put("WORKSPACE", ws.getRemote());
+
+        for (NodeProperty nodeProperty: jenkinsInstance.getGlobalNodeProperties()) {
+            Environment environment = nodeProperty.setUp(b, launcher, buildListener);
+            if (environment != null) {
+                environment.buildEnvVars(env);
+            }
+        }
+
+        // add env contributing actions' values from last build to environment - fixes JENKINS-22009
+        addEnvironmentContributingActionsValues(env, b);
+
+        EnvVars.resolve(env);
+
+        return env;
+    }
+
+    private static void addEnvironmentContributingActionsValues(EnvVars env, AbstractBuild b) {
+        List<? extends Action> buildActions = b.getAllActions();
+        for (Action action : buildActions) {
+            // most importantly, ParametersAction will be processed here (for parameterized builds)
+            if (action instanceof ParametersAction envAction) {
+                envAction.buildEnvironment(b, env);
+            }
+        }
+
+        // Use the default parameter values (if any) instead of the ones from the last build
+        ParametersDefinitionProperty paramDefProp = (ParametersDefinitionProperty) b.getProject().getProperty(ParametersDefinitionProperty.class);
+        if (paramDefProp != null) {
+            for(ParameterDefinition paramDefinition : paramDefProp.getParameterDefinitions()) {
+               ParameterValue defaultValue  = paramDefinition.getDefaultParameterValue();
+               if (defaultValue != null) {
+                   defaultValue.buildEnvironment(b, env);
+               }
+            }
+        }
+    }
+
+    public static String[] fixupNames(String[] names, String[] urls) {
+        String[] returnNames = new String[urls.length];
+        Set<String> usedNames = new HashSet<>();
+
+        for(int i=0; i<urls.length; i++) {
+            String name = names[i];
+
+            if(name == null || name.trim().length() == 0) {
+                name = "origin";
+            }
+
+            String baseName = name;
+            int j=1;
+            while(usedNames.contains(name)) {
+                name = baseName + (j++);
+            }
+
+            usedNames.add(name);
+            returnNames[i] = name;
+        }
+
+
+        return returnNames;
+    }
+
+    private static final Logger LOGGER = Logger.getLogger(GitUtils.class.getName());
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+}

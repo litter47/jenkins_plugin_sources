@@ -1,0 +1,16 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core">
+  <dt>$${GIT_REVISION}</dt>
+  <dd>
+    Expands to the Git SHA1 commit ID that points to the commit that was built.
+
+    <dl>
+      <dt>length=N (optional, default to 40)</dt>
+      <dd>
+        Specify the commit ID length. Full SHA1 commit ID is 40 characters long, but it is common
+        to truncate it at 8 or 12 as that usually provide enough uniqueness and is more legible.
+      </dd>
+    </dl>
+
+  </dd>
+</j:jelly>

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <artifactId>blueocean-parent</artifactId>
+        <groupId>io.jenkins.blueocean</groupId>
+        <version>${revision}${changelist}</version>
+    </parent>
+
+    <name>Blue Ocean Pipeline Editor</name>
+    <description>
+        The Blue Ocean Pipeline Editor is the simplest way for anyone wanting to get started with creating Pipelines in Jenkins
+    </description>
+
+    <artifactId>blueocean-pipeline-editor</artifactId>
+    <packaging>hpi</packaging>
+
+    <url>https://github.com/jenkinsci/blueocean-plugin/blob/master/blueocean/doc/BlueOcean.adoc</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
+
+    <developers>
+     <developer>
+       <id>sophistifunk</id>
+       <name>Josh McDonald</name>
+     </developer>
+     <developer>
+       <id>kzantow</id>
+       <name>Keith Zantow</name>
+     </developer>
+     <developer>
+       <id>abayer</id>
+       <name>Andrew Bayer</name>
+     </developer>
+    </developers>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>blueocean-rest</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>blueocean-dashboard</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>blueocean-commons</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>blueocean-pipeline-api-impl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jenkinsci.plugins</groupId>
+            <artifactId>pipeline-model-definition</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jenkins-ci.plugins</groupId>
+            <artifactId>sonar</artifactId>
+            <scope>test</scope>
+            <exclusions>
+                <!-- RequireUpperBoundDeps with github-branch-source -->
+                <exclusion>
+                    <groupId>com.squareup.okhttp3</groupId>
+                    <artifactId>okhttp</artifactId>
+                </exclusion>
+                <!-- commons-lang3 is provided by commons-lang3-api plugin -->
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.jenkins-ci.plugins</groupId>
+            <artifactId>ant</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,13 @@
+<?jelly escape-by-default='false'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler">
+  <script id="blueocean-page-state-preload-decorator-data" type="application/json">
+    {<j:forEach var="preloader" items="${it.pageStatePreloaders}" varStatus="st">
+      <!-- State Preloader: ${preloader.class.name} -->
+      <j:set var="stateJson" value="${preloader.stateJson}"/>
+      <j:if test="${stateJson != null}">
+        "${preloader.statePropertyPath}": ${stateJson}<j:if test="${!st.last}">,</j:if>
+      </j:if>
+    </j:forEach>}
+  </script>
+  <st:adjunct includes="io.jenkins.blueocean.PageStatePreloadDecorator.preloader"/>
+</j:jelly>

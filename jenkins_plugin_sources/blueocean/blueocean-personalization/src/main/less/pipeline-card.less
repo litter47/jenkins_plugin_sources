@@ -1,0 +1,171 @@
+.pipeline-card {
+    display: flex;
+    align-items: center;
+    border-radius: 3px;
+    color: white;
+    cursor: pointer;
+    height: 40px;
+    padding-left: 24px;
+    padding-right: 24px;
+    min-width: 550px;
+
+    a {
+        color: white;
+        cursor: pointer;
+
+        &:hover {
+            color: white;
+        }
+    }
+
+    .name, .branch, .commit, .time {
+        margin-left: 10px;
+    }
+
+    .branch, .commit, .time {
+        display: flex;
+        align-items: center;
+        flex-grow: 0;
+        overflow: hidden;
+    }
+
+    .commit, .time {
+        flex-basis: 150px;
+        flex-shrink: 2;
+    }
+
+    .name {
+        flex-grow: 1;
+        flex-shrink: 4;
+        flex-basis: 300px;
+
+        overflow: hidden;
+        white-space: nowrap;
+
+        * {
+            //max-width:100%;
+            flex-wrap: nowrap;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+    }
+
+    .branch {
+        flex-basis: 200px;
+        flex-shrink: 3;
+    }
+
+    .branchText, .commitId, .timeText {
+        margin: 0 0 0 5px;
+
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .actions {
+        display: flex;
+        margin-left: 10px;
+        justify-content: flex-end;
+        flex-direction: row;
+        align-items: center;
+        flex-grow: 0;
+        flex-shrink: 0;
+        flex-basis: (24px * 3) + (8px * 2); // 3 Icons, 2 spaces
+    }
+
+    .action-item {
+        display: inline-block;
+        height: 24px;
+    }
+
+    .svg-icon {
+        fill: white;
+        flex-shrink: 0;
+    }
+
+    .action-item.stop-button {
+        width: 20px;
+        height: 20px;
+        margin: 0 2px 2px 0;
+        background-image: url('./icons/stop-white.svg');
+
+        &.stopping {
+            opacity: 0.4;
+        }
+    }
+
+    .progress-spinner.running {
+        circle {
+            stroke: #bcd8f1;
+        }
+        path.running {
+            stroke: white;
+        }
+        circle.inner {
+            stroke: white;
+            fill: white;
+        }
+    }
+
+    .progress-spinner.queued {
+        circle {
+            stroke: white;
+        }
+        circle.inner {
+            stroke: white;
+            fill: white;
+        }
+    }
+
+    .progress-spinner.not_built {
+        circle {
+            stroke: white;
+        }
+    }
+
+    * > .Dialog {
+        color: black;
+        text-align: left;
+    }
+
+    .actions .actions-container {
+        position: relative;
+
+        &:after {
+            position: absolute;
+            content: " ";
+            pointer-events: none;
+            top: 0;
+            right: 24px;
+            width: calc(100% - 24px);
+            height: 100%;
+        }
+
+        > div {
+            height: 24px;
+            vertical-align: middle;
+
+            &:not(:first-child) {
+                margin-left: 8px;
+            }
+        }
+    }
+
+    /*
+        FIXME: The following are hacks around wrapper components in core-js that are screwing up sizing. See:
+         - blueocean-core-js/src/js/components/LiveStatusIndicator.jsx
+         - blueocean-core-js/src/js/parameter/ParametersRunButton.jsx
+    */
+
+    >*:first-child {
+        // This is the status icon
+        flex-grow: 0;
+        flex-shrink: 0;
+        flex-basis: 20px;
+        height: 20px;
+        width: 20px;
+        overflow: hidden;
+    }
+}

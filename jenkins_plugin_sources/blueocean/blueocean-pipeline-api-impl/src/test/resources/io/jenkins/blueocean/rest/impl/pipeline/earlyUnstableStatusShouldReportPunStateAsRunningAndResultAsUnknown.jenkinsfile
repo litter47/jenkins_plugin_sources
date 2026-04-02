@@ -1,0 +1,8 @@
+node {
+    stage ("stage 1 marked as unstable") {
+        unstable('foo')
+    }
+    stage ("stage 2 wait") {
+        sleep 5
+    }
+}

@@ -1,0 +1,68 @@
+name: Deploy API viewer to GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+# Grant GITHUB_TOKEN the permissions required to make a Pages deployment
+permissions:
+  contents: read
+  pages: write      # to deploy to Pages
+  id-token: write   # to verify the deployment originates from an appropriate source
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Only push to GitHub pages from repository in jenkinsci GitHub organization
+    if: ${{ github.repository_owner == 'jenkinsci' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      # https://github.com/jenkins-infra/github-reusable-workflows/issues/36
+      - name: Set up Maven
+        run: |
+          wget --no-verbose https://downloads.apache.org/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz
+          echo $CHECKSUM apache-maven-$MAVEN_VERSION-bin.tar.gz | sha512sum --check
+          tar xzf apache-maven-$MAVEN_VERSION-bin.tar.gz
+          rm apache-maven-$MAVEN_VERSION-bin.tar.gz
+          sudo mv apache-maven-$MAVEN_VERSION /opt/maven
+          sudo rm -f /usr/bin/mvn
+          sudo ln -s /opt/maven/bin/mvn /usr/bin/mvn
+          mvn --version
+        env:
+          MAVEN_VERSION: 3.9.14
+          # https://downloads.apache.org/maven/maven-3/3.9.14/binaries/apache-maven-3.9.14-bin.tar.gz.sha512
+          CHECKSUM: d50af8ab5e6005b46a07f0ce9d3719e67cfdf898da988a84871304cd59fb1af0fef2f99dea709e6e66f21f732f905979b5c2dce6b6860406f60a70e84d9cf0b8
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+      - name: Build API viewer
+        run: mvn -B -V -e -ntp -Pquick-build clean verify
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./job-dsl-plugin/target/gh-pages
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

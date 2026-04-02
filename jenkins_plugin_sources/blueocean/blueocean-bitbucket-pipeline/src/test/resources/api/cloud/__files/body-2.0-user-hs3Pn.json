@@ -1,0 +1,36 @@
+{
+  "website": null,
+  "display_name": "Vivek Pandey",
+  "account_id": "557058:a764abd6-befb-4cdc-8918-b8d612b96dda",
+  "links": {
+    "hooks": {
+      "href": "https://bitbucket.org/!api/2.0/users/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}/hooks"
+    },
+    "self": {
+      "href": "https://bitbucket.org/!api/2.0/users/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}"
+    },
+    "repositories": {
+      "href": "https://bitbucket.org/!api/2.0/repositories/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}"
+    },
+    "html": {
+      "href": "https://bitbucket.org/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}/"
+    },
+    "followers": {
+      "href": "https://bitbucket.org/!api/2.0/users/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}/followers"
+    },
+    "avatar": {
+      "href": "https://bitbucket.org/account/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}/avatar/32/"
+    },
+    "following": {
+      "href": "https://bitbucket.org/!api/2.0/users/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}/following"
+    },
+    "snippets": {
+      "href": "https://bitbucket.org/!api/2.0/snippets/{1c5c9255-d59f-47e2-b5c7-52269c0332b9}"
+    }
+  },
+  "created_on": "2017-06-26T12:34:37.354705+00:00",
+  "is_staff": false,
+  "location": null,
+  "type": "user",
+  "uuid": "{1c5c9255-d59f-47e2-b5c7-52269c0332b9}"
+}

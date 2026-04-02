@@ -1,0 +1,348 @@
+/*
+ * The MIT License
+ *
+ * Copyright 2017 Mark Waite.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package hudson.plugins.git;
+
+import hudson.EnvVars;
+import static hudson.plugins.git.GitSCM.createRepoList;
+import hudson.plugins.git.browser.GitRepositoryBrowser;
+import hudson.plugins.git.browser.GithubWeb;
+import hudson.plugins.git.opt.PreBuildMergeOptions;
+import hudson.plugins.git.util.AncestryBuildChooser;
+import hudson.plugins.git.util.BuildChooser;
+import hudson.plugins.git.util.DefaultBuildChooser;
+import hudson.scm.RepositoryBrowser;
+import org.junit.jupiter.api.Test;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import org.eclipse.jgit.lib.Config;
+import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.jgit.transport.URIish;
+import static org.junit.jupiter.api.Assertions.*;
+
+import org.jvnet.hudson.test.Issue;
+import static org.hamcrest.MatcherAssert.*;
+import static org.hamcrest.Matchers.*;
+
+class GitSCMUnitTest {
+
+    private final String gitDir = ".";
+    private final GitSCM gitSCM = new GitSCM(gitDir);
+    private final String repoURL = "https://github.com/jenkinsci/git-plugin";
+
+    @Test
+    @Deprecated
+    void testGetSubmoduleCfg() {
+        Collection<SubmoduleConfig> emptySubmoduleConfigList = new ArrayList<>();
+        assertThat(gitSCM.getSubmoduleCfg(), is(emptySubmoduleConfigList));
+    }
+
+    @Test
+    @Deprecated
+    void testSetSubmoduleCfg() {
+        Collection<SubmoduleConfig> emptySubmoduleConfigList = new ArrayList<>();
+        Collection<SubmoduleConfig> submoduleConfigList = new ArrayList<>();
+        SubmoduleConfig config = new SubmoduleConfig();
+        submoduleConfigList.add(config);
+        gitSCM.setSubmoduleCfg(submoduleConfigList);
+        assertThat(gitSCM.getSubmoduleCfg(), is(emptySubmoduleConfigList));
+    }
+
+    @Test
+    void testCreateRepoList() {
+        String name = null;
+        String refspec = null;
+        String credentialsId = null;
+        List<UserRemoteConfig> expectedRemoteConfigList = new ArrayList<>();
+        UserRemoteConfig remoteConfig = new UserRemoteConfig(repoURL, name, refspec, credentialsId);
+        expectedRemoteConfigList.add(remoteConfig);
+        List<UserRemoteConfig> remoteConfigList = GitSCM.createRepoList(repoURL, credentialsId);
+        assertUserRemoteConfigListEquals(remoteConfigList, expectedRemoteConfigList);
+    }
+
+    private void assertUserRemoteConfigListEquals(List<UserRemoteConfig> remoteConfigList, List<UserRemoteConfig> expectedRemoteConfigList) {
+        /* UserRemoteConfig lacks an equals method - ugh */
+        assertThat(remoteConfigList.toString(), is(expectedRemoteConfigList.toString()));
+        assertThat(remoteConfigList.get(0).getUrl(), is(expectedRemoteConfigList.get(0).getUrl()));
+        assertThat(remoteConfigList.get(0).getName(), is(expectedRemoteConfigList.get(0).getName()));
+        assertThat(remoteConfigList.get(0).getRefspec(), is(expectedRemoteConfigList.get(0).getRefspec()));
+        assertThat(remoteConfigList.get(0).getCredentialsId(), is(expectedRemoteConfigList.get(0).getCredentialsId()));
+        assertThat(remoteConfigList.size(), is(1));
+    }
+
+    @Test
+    void testGetBrowser() {
+        assertThat(gitSCM.getBrowser(), is(nullValue()));
+    }
+
+    @Test
+    void testSetBrowser() {
+        GitRepositoryBrowser browser = new GithubWeb(repoURL);
+        gitSCM.setBrowser(browser);
+        assertThat(gitSCM.getBrowser(), is(browser));
+    }
+
+    @Test
+    void testGuessBrowser() {
+        /* Well tested in other classes */
+        RepositoryBrowser result = gitSCM.guessBrowser();
+        assertThat(result, is(nullValue()));
+    }
+
+    @Test
+    void testGetBuildChooser() {
+        assertThat(gitSCM.getBuildChooser(), is(instanceOf(DefaultBuildChooser.class)));
+    }
+
+    @Test
+    void testSetBuildChooser() throws Exception {
+        BuildChooser ancestryBuildChooser = new AncestryBuildChooser(1, "string");
+        gitSCM.setBuildChooser(ancestryBuildChooser);
+        assertThat(gitSCM.getBuildChooser(), is(ancestryBuildChooser));
+    }
+
+    @Test
+    void testSetBuildChooserDefault() throws Exception {
+        BuildChooser ancestryBuildChooser = new AncestryBuildChooser(1, "string");
+        gitSCM.setBuildChooser(ancestryBuildChooser);
+        BuildChooser defaultBuildChooser = new DefaultBuildChooser();
+        gitSCM.setBuildChooser(defaultBuildChooser);
+        assertThat(gitSCM.getBuildChooser(), is(instanceOf(DefaultBuildChooser.class)));
+    }
+
+    @Test
+    void testGetRepositoryByName() throws Exception {
+        RemoteConfig expected = new RemoteConfig(new Config(), "origin");
+        expected.addURI(new URIish(gitDir));
+        assertRemoteConfigEquals(gitSCM.getRepositoryByName("origin"), expected);
+    }
+
+    private void assertRemoteConfigEquals(RemoteConfig remoteConfig, RemoteConfig expected) {
+        assertThat(remoteConfig.getName(), is(expected.getName()));
+        assertThat(remoteConfig.getURIs(), is(expected.getURIs()));
+    }
+
+    private void assertRemoteConfigListEquals(List<RemoteConfig> remoteConfigList, List<RemoteConfig> expectedList) {
+        int expectedIndex = 0;
+        for (RemoteConfig remoteConfig : remoteConfigList) {
+            assertRemoteConfigEquals(remoteConfig, expectedList.get(expectedIndex++));
+        }
+    }
+
+    @Test
+    void testGetRepositoryByNameNoSuchName() {
+        assertThat(gitSCM.getRepositoryByName("no-such-name"), is(nullValue()));
+    }
+
+    @Test
+    void testGetRepositoryByNameEmptyName() {
+        assertThat(gitSCM.getRepositoryByName(""), is(nullValue()));
+    }
+
+    @Test
+    void testGetRepositoryByNameNullName() {
+        assertThat(gitSCM.getRepositoryByName(null), is(nullValue()));
+    }
+
+    @Test
+    void testGetUserRemoteConfigs() {
+        String name = null;
+        String refspec = null;
+        String credentialsId = null;
+        List<UserRemoteConfig> expectedRemoteConfigList = new ArrayList<>();
+        UserRemoteConfig remoteConfig = new UserRemoteConfig(gitDir, name, refspec, credentialsId);
+        expectedRemoteConfigList.add(remoteConfig);
+        assertUserRemoteConfigListEquals(gitSCM.getUserRemoteConfigs(), expectedRemoteConfigList);
+    }
+
+    @Test
+    void testGetRepositories() throws Exception {
+        List<RemoteConfig> expectedRemoteConfigList = new ArrayList<>();
+        RemoteConfig remoteConfig = new RemoteConfig(new Config(), "origin");
+        remoteConfig.addURI(new URIish(gitDir));
+        expectedRemoteConfigList.add(remoteConfig);
+        assertRemoteConfigListEquals(gitSCM.getRepositories(), expectedRemoteConfigList);
+    }
+
+    @Test
+    void testDeriveLocalBranchName() {
+        assertThat(gitSCM.deriveLocalBranchName("origin/master"), is("master"));
+        assertThat(gitSCM.deriveLocalBranchName("master"), is("master"));
+        assertThat(gitSCM.deriveLocalBranchName("origin/feature/xyzzy"), is("feature/xyzzy"));
+        assertThat(gitSCM.deriveLocalBranchName("feature/xyzzy"), is("feature/xyzzy"));
+    }
+
+    @Test
+    void testGetGitTool() {
+        assertThat(gitSCM.getGitTool(), is(nullValue()));
+    }
+
+    @Test
+    void testGetParameterString() {
+        String original = "${A}/${B} ${A}/${C}";
+        EnvVars env = new EnvVars();
+        env.put("A", "A-value");
+        env.put("B", "B-value");
+        assertThat(GitSCM.getParameterString(original, env), is("A-value/B-value A-value/${C}"));
+    }
+
+    @Test
+    void testRequiresWorkspaceForPolling() {
+        /* Assumes workspace is required */
+        assertTrue(gitSCM.requiresWorkspaceForPolling());
+    }
+
+    @Test
+    void testRequiresWorkspaceForPollingSingleBranch() throws Exception {
+        /* Force single-branch use case */
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("master")),
+                null, null, Collections.emptyList());
+        assertFalse(bigGitSCM.requiresWorkspaceForPolling());
+    }
+
+    @Test
+    void testRequiresWorkspaceForPollingSingleBranchWithRemoteName() throws Exception {
+        /* Force single-branch use case */
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("origin/master")),
+                null, null, Collections.emptyList());
+        assertFalse(bigGitSCM.requiresWorkspaceForPolling());
+    }
+
+    @Test
+    void testRequiresWorkspaceForPollingSingleBranchWithWildcardRemoteName() throws Exception {
+        /* Force single-branch use case */
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("*/master")),
+                null, null, Collections.emptyList());
+        assertFalse(bigGitSCM.requiresWorkspaceForPolling());
+    }
+
+    @Test
+    void testRequiresWorkspaceForPollingSingleBranchWithWildcardSuffix() throws Exception {
+        /* Force single-branch use case */
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("master*")),
+                null, null, Collections.emptyList());
+        assertTrue(bigGitSCM.requiresWorkspaceForPolling());
+    }
+
+    @Test
+    void testRequiresWorkspaceForPollingMultiBranch() throws Exception {
+        /* Multi-branch use case */
+        List<BranchSpec> branches = new ArrayList<>();
+        branches.add(new BranchSpec("master"));
+        branches.add(new BranchSpec("origin/master"));
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                branches,
+                null, null, Collections.emptyList());
+        assertTrue(bigGitSCM.requiresWorkspaceForPolling());
+    }
+
+    @Test
+    void testRequiresWorkspaceForPollingEmptyBranchName() throws Exception {
+        /* Multi-branch use case */
+        EnvVars env = new EnvVars();
+        env.put("A", "");
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("${A}")),
+                null, null, Collections.emptyList());
+        assertFalse(bigGitSCM.requiresWorkspaceForPolling(env));
+    }
+
+    @Test
+    void testCreateChangeLogParser() {
+        assertThat(gitSCM.createChangeLogParser(), is(instanceOf(GitChangeLogParser.class)));
+    }
+
+    @Test
+    @Deprecated
+    void testIsDoGenerateSubmoduleConfigurations() {
+        assertFalse(gitSCM.isDoGenerateSubmoduleConfigurations());
+    }
+
+    @Test
+    @Deprecated
+    void testIsDoGenerateSubmoduleConfigurationsTrue() throws Exception {
+        GitSCM bigGitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("master")),
+                null, null, Collections.emptyList());
+        assertFalse(bigGitSCM.isDoGenerateSubmoduleConfigurations());
+    }
+
+    @Test
+    void testGetBranches() {
+        List<BranchSpec> expectedBranchList = new ArrayList<>();
+        expectedBranchList.add(new BranchSpec("**"));
+        assertBranchSpecListEquals(gitSCM.getBranches(), expectedBranchList);
+    }
+
+    private void assertBranchSpecListEquals(List<BranchSpec> branchList, List<BranchSpec> expectedBranchList) {
+        int expectedIndex = 0;
+        for (BranchSpec branchSpec : branchList) {
+            assertThat(branchSpec.getName(), is(expectedBranchList.get(expectedIndex++).getName()));
+        }
+        assertThat(branchList.size(), is(expectedBranchList.size()));
+    }
+
+    @Test
+    void testGetKey() {
+        assertThat(gitSCM.getKey(), is("git " + gitDir));
+    }
+
+    @Test
+    @Deprecated
+    void testGetMergeOptions() throws Exception {
+        PreBuildMergeOptions expectedMergeOptions = new PreBuildMergeOptions();
+        PreBuildMergeOptions mergeOptions = gitSCM.getMergeOptions();
+        assertThat(mergeOptions.getRemoteBranchName(), is(expectedMergeOptions.getRemoteBranchName()));
+        assertThat(mergeOptions.getMergeTarget(), is(expectedMergeOptions.getMergeTarget()));
+    }
+
+    @Test
+    @Deprecated
+    void testGetDoGenerateSubmoduleConfigurations() {
+        assertFalse(gitSCM.getDoGenerateSubmoduleConfigurations());
+    }
+
+    @Test
+    @Deprecated
+    void testSetDoGenerateSubmoduleConfigurations() {
+        gitSCM.setDoGenerateSubmoduleConfigurations(true);
+        /* Confirms the passed value `true` is ignored */
+        assertFalse(gitSCM.getDoGenerateSubmoduleConfigurations());
+    }
+
+    @Issue("JENKINS-68562")
+    @Test
+    void testAbortIfSourceIsLocal() throws Exception {
+        GitSCM gitSCM = new GitSCM(createRepoList(repoURL, null),
+                Collections.singletonList(new BranchSpec("master")),
+                null, null, Collections.emptyList());
+        assertDoesNotThrow(gitSCM::abortIfSourceIsLocal, "https remote URLs should always be valid");
+    }
+}

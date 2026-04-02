@@ -1,0 +1,262 @@
+package com.cloudbees.plugins.credentials;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.cloudbees.plugins.credentials.common.CertificateCredentials;
+import com.cloudbees.plugins.credentials.common.StandardCertificateCredentials;
+import com.cloudbees.plugins.credentials.common.UsernamePasswordCredentials;
+import com.cloudbees.plugins.credentials.impl.CertificateCredentialsImpl;
+
+import com.cloudbees.plugins.credentials.impl.CertificateCredentialsImplTest;
+import hudson.model.UnprotectedRootAction;
+import hudson.security.ACL;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import net.sf.json.JSONObject;
+import org.apache.commons.io.IOUtils;
+import org.hamcrest.Matchers;
+import org.htmlunit.Page;
+import org.htmlunit.html.DomNode;
+import org.htmlunit.html.DomNodeList;
+import org.htmlunit.html.HtmlButton;
+import org.htmlunit.html.HtmlDivision;
+import org.htmlunit.html.HtmlElementUtil;
+import org.htmlunit.html.HtmlForm;
+import org.htmlunit.html.HtmlFormUtil;
+import org.htmlunit.html.HtmlInput;
+import org.htmlunit.html.HtmlOption;
+import org.htmlunit.html.HtmlPage;
+import org.htmlunit.html.HtmlRadioButtonInput;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.jvnet.hudson.test.Issue;
+import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.TestExtension;
+import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
+
+@WithJenkins
+public class CredentialsSelectHelperTest {
+
+    private JenkinsRule j;
+
+    private String pemCert;
+    private String pemKey;
+
+    private static final String VALID_PASSWORD = "password";
+    private static final String INVALID_PASSWORD = "bla";
+
+    @BeforeEach
+    void setup(JenkinsRule j) throws IOException {
+        this.j = j;
+        pemCert = IOUtils.toString(CertificateCredentialsImplTest.class.getResource("certs.pem"),
+                                   StandardCharsets.UTF_8);
+        pemKey = IOUtils.toString(CertificateCredentialsImplTest.class.getResource("key.pem"),
+                                  StandardCharsets.UTF_8);
+    }
+
+
+    @Test
+    void doAddCredentialsFromPopupWorksAsExpected() throws Exception {
+        try (JenkinsRule.WebClient wc = j.createWebClient()) {
+            HtmlPage htmlPage = wc.goTo("credentials-selection");
+
+            HtmlButton addCredentialsButton = htmlPage.querySelector(".credentials-add-menu");
+            addCredentialsButton.click();
+
+            HtmlButton jenkinsCredentialsOption = htmlPage.querySelector(".jenkins-dropdown__item");
+            HtmlElementUtil.click(jenkinsCredentialsOption);
+
+            HtmlRadioButtonInput item = htmlPage.querySelector(".jenkins-choice-list__item input");
+            HtmlElementUtil.click(item);
+
+            HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-next");
+            HtmlElementUtil.click(formSubmitButton);
+
+            HtmlForm form = htmlPage.querySelector("#credentials-dialog-form");
+
+            HtmlInput username = form.querySelector("input[name='_.username']");
+            username.setValue("bob");
+            HtmlInput password = form.querySelector("input[name='_.password']");
+            password.setValue("secret");
+            HtmlInput id = form.querySelector("input[name='_.id']");
+            id.setValue("test");
+
+            formSubmitButton = htmlPage.querySelector("#cr-dialog-submit");
+            HtmlElementUtil.click(formSubmitButton);
+
+            // check if credentials were added
+            List<UsernamePasswordCredentials> creds = CredentialsProvider.lookupCredentialsInItem(UsernamePasswordCredentials.class, null, ACL.SYSTEM2);
+            assertThat(creds, Matchers.hasSize(1));
+            UsernamePasswordCredentials cred = creds.get(0);
+            assertThat(cred.getUsername(), is("bob"));
+            assertThat(cred.getPassword().getPlainText(), is("secret"));
+        }
+    }
+
+    @Test
+    @Issue("JENKINS-74964")
+    void doAddCredentialsFromPopupForPEMCertificateKeystore() throws Exception {
+
+        try (JenkinsRule.WebClient wc = j.createWebClient()) {
+            HtmlPage htmlPage = wc.goTo("credentials-selection");
+            HtmlForm form = selectPEMCertificateKeyStore(htmlPage, wc);
+            HtmlInput id = form.querySelector("input[name='_.id']");
+            id.setValue("test");
+            form.getTextAreaByName("_.certChain").setTextContent(pemCert);
+            form.getTextAreaByName("_.privateKey").setTextContent(pemKey);
+            form.getInputsByName("_.password").forEach(input -> input.setValue(VALID_PASSWORD));
+
+            HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-submit");
+            HtmlElementUtil.click(formSubmitButton);
+
+            List<StandardCertificateCredentials> creds = CredentialsProvider.lookupCredentialsInItem(StandardCertificateCredentials.class, null, ACL.SYSTEM2);
+            assertThat(creds, Matchers.hasSize(1));
+            StandardCertificateCredentials cred = creds.get(0);
+            assertThat(cred.getId(), is("test"));
+        }
+    }
+
+    @Test
+    @Issue("JENKINS-74964")
+    void doAddCredentialsFromPopupForPEMCertificateKeystore_missingKeyStore() throws Exception {
+
+        try (JenkinsRule.WebClient wc = j.createWebClient()) {
+            HtmlPage htmlPage = wc.goTo("credentials-selection");
+            selectPEMCertificateKeyStore(htmlPage, wc);
+
+            HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-submit");
+            HtmlElementUtil.click(formSubmitButton);
+
+            List<StandardCertificateCredentials> creds = CredentialsProvider.lookupCredentialsInItem(StandardCertificateCredentials.class, null, ACL.SYSTEM2);
+            assertThat(creds, Matchers.hasSize(0));
+        }
+    }
+
+    @Test
+    @Issue("JENKINS-74964")
+    void doAddCredentialsFromPopupForInvalidPEMCertificateKeystore_missingCert() throws Exception {
+
+        try (JenkinsRule.WebClient wc = j.createWebClient()) {
+            HtmlPage htmlPage = wc.goTo("credentials-selection");
+            HtmlForm form = selectPEMCertificateKeyStore(htmlPage, wc);
+            form.getTextAreaByName("_.certChain").setTextContent(null);
+            form.getTextAreaByName("_.privateKey").setTextContent(pemKey);
+            form.getInputsByName("_.password").forEach(input -> input.setValue(VALID_PASSWORD));
+
+            HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-submit");
+            HtmlElementUtil.click(formSubmitButton);
+
+            List<StandardCertificateCredentials> creds = CredentialsProvider.lookupCredentialsInItem(StandardCertificateCredentials.class, null, ACL.SYSTEM2);
+            assertThat(creds, Matchers.hasSize(0));
+        }
+    }
+
+    @Test
+    @Issue("JENKINS-74964")
+    void doAddCredentialsFromPopupForInvalidPEMCertificateKeystore_missingPassword() throws Exception {
+
+        try (JenkinsRule.WebClient wc = j.createWebClient()) {
+            HtmlPage htmlPage = wc.goTo("credentials-selection");
+            HtmlForm form = selectPEMCertificateKeyStore(htmlPage, wc);
+            form.getTextAreaByName("_.certChain").setTextContent(pemCert);
+            form.getTextAreaByName("_.privateKey").setTextContent(pemKey);
+
+            HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-submit");
+            HtmlElementUtil.click(formSubmitButton);
+
+            List<StandardCertificateCredentials> creds = CredentialsProvider.lookupCredentialsInItem(StandardCertificateCredentials.class, null, ACL.SYSTEM2);
+            assertThat(creds, Matchers.hasSize(0));
+        }
+    }
+
+    @Test
+    @Issue("JENKINS-74964")
+    void doAddCredentialsFromPopupForInvalidPEMCertificateKeystore_invalidPassword() throws Exception {
+
+        try (JenkinsRule.WebClient wc = j.createWebClient()) {
+            HtmlPage htmlPage = wc.goTo("credentials-selection");
+            HtmlForm form = selectPEMCertificateKeyStore(htmlPage, wc);
+            form.getTextAreaByName("_.certChain").setTextContent(pemCert);
+            form.getTextAreaByName("_.privateKey").setTextContent(pemKey);
+            form.getInputsByName("_.password").forEach(input -> input.setValue(INVALID_PASSWORD));
+
+            HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-submit");
+            HtmlElementUtil.click(formSubmitButton);
+
+            List<StandardCertificateCredentials> creds = CredentialsProvider.lookupCredentialsInItem(StandardCertificateCredentials.class, null, ACL.SYSTEM2);
+            assertThat(creds, Matchers.hasSize(0));
+        }
+    }
+
+    private HtmlForm selectPEMCertificateKeyStore(HtmlPage htmlPage, JenkinsRule.WebClient wc) throws IOException {
+        HtmlButton addCredentialsButton = htmlPage.querySelector(".credentials-add-menu");
+        addCredentialsButton.click();
+
+        HtmlButton jenkinsCredentialsOption = htmlPage.querySelector(".jenkins-dropdown__item");
+        HtmlElementUtil.click(jenkinsCredentialsOption);
+
+        HtmlForm form = htmlPage.getFormByName("dialog");
+        String certificateDisplayName = j.jenkins.getDescriptor(CertificateCredentialsImpl.class).getDisplayName();
+        String KeyStoreSourceDisplayName = j.jenkins.getDescriptor(
+                CertificateCredentialsImpl.PEMEntryKeyStoreSource.class).getDisplayName();
+
+        DomNodeList<DomNode> allOptions = form.querySelectorAll(".jenkins-choice-list__item");
+
+        boolean optionFound = selectOption(allOptions, certificateDisplayName);
+        assertTrue(optionFound, "The Certificate option was not found in the credentials type select");
+
+        HtmlButton formSubmitButton = htmlPage.querySelector("#cr-dialog-next");
+        HtmlElementUtil.click(formSubmitButton);
+
+        List<HtmlRadioButtonInput> inputs = htmlPage.getDocumentElement().getByXPath(
+                "//input[contains(@name, 'keyStoreSource') and following-sibling::label[contains(.,'"
+                + KeyStoreSourceDisplayName + "')]]");
+        assertThat("query should return only a singular input", inputs, hasSize(1));
+        HtmlElementUtil.click(inputs.get(0));
+        wc.waitForBackgroundJavaScript(4000);
+        form = htmlPage.getFormByName("newCredentials");
+
+        return form;
+    }
+
+    public static boolean selectOption(DomNodeList<DomNode> allOptions, String optionName) {
+        return allOptions.stream().anyMatch(domNode -> {
+            if (domNode instanceof HtmlDivision option) {
+                if (option.getVisibleText().contains(optionName)) {
+                    try {
+                        HtmlRadioButtonInput item = domNode.querySelector(".jenkins-choice-list__item input");
+                        HtmlElementUtil.click(item);
+
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                    return true;
+                }
+            }
+
+            return false;
+        });
+    }
+
+    @TestExtension
+    public static class CredentialsSelectionAction implements UnprotectedRootAction {
+        @Override
+        public String getIconFileName() {
+            return null;
+        }
+
+        @Override
+        public String getDisplayName() {
+            return null;
+        }
+
+        @Override
+        public String getUrlName() {
+            return "credentials-selection";
+        }
+    }
+}

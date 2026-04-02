@@ -1,0 +1,10 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:f="/lib/form" xmlns:c="/lib/credentials" >
+
+    <f:entry title="${%SSH Credentials}" field="credentialsId">
+        <c:select/>
+    </f:entry>
+
+    <f:dropdownDescriptorSelector title="${%Host Key Verification Strategy}" field="sshHostKeyVerificationStrategy" />
+
+</j:jelly>

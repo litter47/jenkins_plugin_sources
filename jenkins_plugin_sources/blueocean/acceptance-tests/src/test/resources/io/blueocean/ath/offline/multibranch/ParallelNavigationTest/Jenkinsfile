@@ -1,0 +1,15 @@
+node {
+
+    stage("parallel") {
+      parallel firstBranch: {
+          echo 'first branch visible'
+          sleep(30)
+
+      }, secondBranch: {
+          echo 'second branch visible'
+          sleep(30)
+      }
+
+    }
+
+}

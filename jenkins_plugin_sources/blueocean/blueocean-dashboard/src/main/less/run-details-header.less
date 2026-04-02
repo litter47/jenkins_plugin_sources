@@ -1,0 +1,125 @@
+.RunDetailsHeader-title,
+.RunDetailsHeader-sources,
+.RunDetailsHeader-messages,
+.RunDetailsHeader-times {
+    a {
+        cursor: pointer;
+        text-decoration: none;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
+}
+
+.RunDetailsHeader-title .run-nav-container {
+    vertical-align: middle;
+
+    span:first-child {
+        margin-left: 10px;
+    }
+}
+
+.RunDetailsHeader-sources,
+.RunDetailsHeader-messages,
+.RunDetailsHeader-times
+{
+    height:100%;
+    padding-top: 2px;
+
+    div {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+
+        &.causes {
+            display: block;
+            max-width: 99.99%;
+            .overflow-ellipsis();
+        }
+
+        svg+* {
+            margin-left: 8px;
+        }
+    }
+}
+
+.RunDetailsHeader-sources,
+.RunDetailsHeader-times {
+    flex-basis: 20%;
+    max-width: 20%;
+
+    .u-label-value {
+
+        label {
+            display: block;
+            width: 61px;
+            flex-shrink: 0;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        label.pullRequest {
+            display: block;
+            width: 85px;
+            flex-shrink: 0;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        span {
+            position: relative;
+            display: block;
+            padding-right: 17px;
+            .overflow-ellipsis();
+
+            svg {
+                display: block;
+                fill: #ffffff;
+                opacity: 50%;
+                margin-left: 3px;
+            }
+
+            .inline-svg {
+                position: absolute;
+                right: 0;
+
+                svg{
+                    display: inline-block;
+                    vertical-align: middle;
+                }
+            }
+        }
+
+
+    }
+}
+
+.RunDetailsHeader-messages {
+    flex-grow: 1;
+}
+
+.RunDetails-content {
+    margin: 24px 42px;
+
+    .RunDetails-Description {
+        margin-bottom: 24px;
+    }
+
+    .download-log-button .restart-stage {
+        display: inline-block;
+        text-decoration: underline;
+        margin-right: 5px;
+
+        svg {
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 5px;
+        }
+    }
+}
+
+.DownstreamRuns-header {
+    margin: 1em 0;
+    font-weight: bold;
+}

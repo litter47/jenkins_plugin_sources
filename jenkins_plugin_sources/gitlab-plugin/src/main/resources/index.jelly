@@ -1,0 +1,4 @@
+<?jelly escape-by-default='true'?>
+<div>
+  This plugin allows <a href="http://gitlab.com/">GitLab</a> to trigger Jenkins builds and display their results in the GitLab UI.
+</div>

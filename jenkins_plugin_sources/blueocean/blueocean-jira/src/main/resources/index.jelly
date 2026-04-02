@@ -1,0 +1,4 @@
+<?jelly escape-by-default='true'?>
+<div>
+  Provides JIRA integration for the Blue Ocean user interface.
+</div>
